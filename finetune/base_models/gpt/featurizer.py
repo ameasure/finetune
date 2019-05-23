@@ -186,7 +186,7 @@ def gpt_featurizer(X, encoder, config, train=False, reuse=None):
 
         h = embed(X, embed_weights)
         for layer in range(config.n_layer):
-            if (config.n_layer - layer) == config.num_layers_trained and config.num_layers_trained != config.n_layer:
+            if (config.n_layer - layer) == config.num_layers_trained and config.num_layers_trained != config.n_layer and config.bert_adapter_size is not None:
                 h = tf.stop_gradient(h)
                 train_layer = False
             else:

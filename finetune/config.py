@@ -266,7 +266,7 @@ def get_default_config():
         b2=0.999,
         epsilon=1e-8,
         lr_schedule='warmup_linear',
-        lr=GridSearchable(6.25e-3, [6.25e-4, 6.25e-5, 6.25e-6]),
+        lr=GridSearchable(6.25e-5, [6.25e-4, 6.25e-5, 6.25e-6]),
         lr_warmup=0.002,
         max_grad_norm=1.0,
         prefit_init=False,
@@ -299,7 +299,7 @@ def get_default_config():
 
         # Location of model weights
         base_model=GPTModel,
-        base_model_path=None,
+        base_model_path='SummariesBase.jl',
 
         # Possible `SourceModel` specific settings
         n_heads=None,
