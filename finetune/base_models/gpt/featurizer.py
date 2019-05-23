@@ -117,13 +117,23 @@ def mlp(x, scope, n_state, act_fn, resid_pdrop, train=False):
         h2 = dropout(h2, resid_pdrop, train)
         return h2
 
+def adapter(input, adapter_size, hidden_dropout_prob = 0.1):
+    down_projection = tf.layers.dense(input, adapter_size, activation = 'sigmoid',
+        kernel_initializer = create_initializer(0.001))
+    down_projection = dropout(down_projection, hidden_dropout_prob)
+    up_projection = tf.layers.dense(down_projection, tf.shape(input)[0], activation = 'sigmoid',
+        kernel_initializer = create_initializer(0.001))
+    return up_projection + input
 
-def block(x, n_head, act_fn, resid_pdrop, attn_pdrop, scope, train=False, scale=False):
+
+def block(x, n_head, act_fn, adptr_size, resid_pdrop, attn_pdrop, scope, train=False, scale=False):
     with tf.variable_scope(scope):
         nx = shape_list(x)[-1]
         a = attn(x, 'attn', nx, n_head, resid_pdrop, attn_pdrop, train=train, scale=scale)
+        a = adapter(a, adptr_size, )
         n = norm(x + a, 'ln_1')
         m = mlp(n, 'mlp', nx * 4, act_fn, resid_pdrop, train=train)
+        m = adapter(m, adptr_size, )
         h = norm(n + m, 'ln_2')
         return h
 
@@ -174,8 +184,8 @@ def gpt_featurizer(X, encoder, config, train=False, reuse=None):
 
             with tf.variable_scope('h%d_' % layer):
                 block_fn = functools.partial(block, n_head=config.n_heads, act_fn=config.act_fn,
-                                             resid_pdrop=config.resid_p_drop, attn_pdrop=config.attn_p_drop,
-                                             scope='h%d' % layer, train=train_layer, scale=True)
+                                            adptr_size = config.bert_adapter_size, resid_pdrop=config.resid_p_drop,
+                                            attn_pdrop=config.attn_p_drop, scope='h%d' % layer, train=train_layer, scale=True)
                 if config.low_memory_mode and train_layer:
                     block_fn = recompute_grad(block_fn, use_entire_scope=True)
                 if layer < config.n_layer - 1:

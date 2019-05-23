@@ -266,7 +266,7 @@ def get_default_config():
         b2=0.999,
         epsilon=1e-8,
         lr_schedule='warmup_linear',
-        lr=GridSearchable(6.25e-5, [6.25e-4, 6.25e-5, 6.25e-6]),
+        lr=GridSearchable(6.25e-3, [6.25e-4, 6.25e-5, 6.25e-6]),
         lr_warmup=0.002,
         max_grad_norm=1.0,
         prefit_init=False,
@@ -298,7 +298,7 @@ def get_default_config():
         assocation_loss_weight=100.0,
 
         # Location of model weights
-        base_model=GPTModel,
+        base_model=BERT,
         base_model_path=None,
 
         # Possible `SourceModel` specific settings
@@ -313,7 +313,8 @@ def get_default_config():
         n_embed_featurizer=None, # needed because the dimensions CNN output are different from the embedding dimensions
 
         # BERT only
-        bert_intermediate_size=None
+        bert_intermediate_size=None,
+        bert_adapter_size = 64 #from Parameter Efficient Transfer Learning paper
     )
     return settings
 

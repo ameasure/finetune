@@ -155,6 +155,12 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
                 lr * schedules[params.lr_schedule](tf.to_float(global_step) / total_num_steps)
             )
 
+            if params.bert_adapter_size is not None:
+                    params.trained_variables = [v for v in tf.global_variables()
+                     if 'adapter' in v.name or 'target' in v.name]
+            else:
+                params.trained_variables = [v for v in tf.global_variables()]
+
             def optimizer(lr):
 
                 Optimizer = OPTIMIZERS.get(params.optimizer, None)
@@ -173,8 +179,11 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
                     epsilon=params.epsilon,
                     weight_decay=params.l2_reg * lr
                 )
-                
                 decay_var_list = [v for v in tf.global_variables() if len(v.get_shape()) > 1 or params.vector_l2]
+
+                if params.bert_adapter_size is not None:
+                    decay_var_list =  set(params.trained_variables).intersection(decay_var_list)
+
                 opt.apply_gradients = functools.partial(opt.apply_gradients, decay_var_list=decay_var_list)
 
                 if params.dont_optimize_zero_gradients:
@@ -191,7 +200,8 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
                 clip_gradients=float(params.max_grad_norm),
                 learning_rate_decay_fn=lr_decay,
                 increment_global_step=True,
-                summaries=summaries
+                summaries=summaries,
+                variables = params.trained_variables
             )
 
         if mode == tf.estimator.ModeKeys.PREDICT:
