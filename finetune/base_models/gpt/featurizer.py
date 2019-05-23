@@ -117,12 +117,18 @@ def mlp(x, scope, n_state, act_fn, resid_pdrop, train=False):
         h2 = dropout(h2, resid_pdrop, train)
         return h2
 
-def adapter(input, adapter_size, hidden_dropout_prob = 0.1):
+
+def create_initializer(initializer_range=0.001):
+  """Creates a `truncated_normal_initializer` with the given range."""
+  return tf.truncated_normal_initializer(stddev=initializer_range)
+
+
+def adapter(input, adapter_size, train, nx, hidden_dropout_prob = 0.1):
     down_projection = tf.layers.dense(input, adapter_size, activation = 'sigmoid',
-        kernel_initializer = create_initializer(0.001))
-    down_projection = dropout(down_projection, hidden_dropout_prob)
-    up_projection = tf.layers.dense(down_projection, tf.shape(input)[0], activation = 'sigmoid',
-        kernel_initializer = create_initializer(0.001))
+        kernel_initializer = create_initializer())
+    down_projection = dropout(down_projection, hidden_dropout_prob, train)
+    up_projection = tf.layers.dense(down_projection, nx,
+        kernel_initializer = create_initializer())
     return up_projection + input
 
 
@@ -130,10 +136,14 @@ def block(x, n_head, act_fn, adptr_size, resid_pdrop, attn_pdrop, scope, train=F
     with tf.variable_scope(scope):
         nx = shape_list(x)[-1]
         a = attn(x, 'attn', nx, n_head, resid_pdrop, attn_pdrop, train=train, scale=scale)
-        a = adapter(a, adptr_size, )
+        if adptr_size is not None:
+            with tf.variable_scope('attn_adapter'):
+                a = adapter(a, adptr_size, train, nx)
         n = norm(x + a, 'ln_1')
         m = mlp(n, 'mlp', nx * 4, act_fn, resid_pdrop, train=train)
-        m = adapter(m, adptr_size, )
+        if adptr_size is not None:
+            with tf.variable_scope('dense_adapter'):
+                m = adapter(m, adptr_size, train, nx)
         h = norm(n + m, 'ln_2')
         return h
 

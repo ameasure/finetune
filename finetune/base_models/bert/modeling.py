@@ -758,7 +758,7 @@ def adapter(input, adapter_size, input_size, hidden_dropout_prob = 0.1):
     down_projection = tf.layers.dense(input, adapter_size, activation = 'sigmoid',
         kernel_initializer = create_initializer(0.001))
     down_projection = dropout(down_projection, hidden_dropout_prob)
-    up_projection = tf.layers.dense(down_projection, input_size, activation = 'sigmoid',
+    up_projection = tf.layers.dense(down_projection, input_size,
         kernel_initializer = create_initializer(0.001))
     return up_projection + input
 

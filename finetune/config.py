@@ -298,7 +298,7 @@ def get_default_config():
         assocation_loss_weight=100.0,
 
         # Location of model weights
-        base_model=BERT,
+        base_model=GPTModel,
         base_model_path=None,
 
         # Possible `SourceModel` specific settings
