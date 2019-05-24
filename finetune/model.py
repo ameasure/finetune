@@ -156,11 +156,11 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
             )
 
             if params.bert_adapter_size is not None:
+                    norm_variable_scopes = ['b:0', 'g:0']
                     params.trained_variables = [v for v in tf.global_variables()
-                     if 'adapter' in v.name or 'target' in v.name]
+                     if 'adapter' in v.name or 'target' in v.name or v.name[-3:] in norm_variable_scopes]
             else:
                 params.trained_variables = [v for v in tf.global_variables()]
-
             def optimizer(lr):
 
                 Optimizer = OPTIMIZERS.get(params.optimizer, None)
