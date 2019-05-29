@@ -12,7 +12,7 @@ import tensorflow as tf
 import pandas as pd
 from tensorflow.python.data import Dataset
 from sklearn.model_selection import train_test_split
-
+import gc
 
 import finetune
 from finetune.errors import FinetuneError
@@ -308,9 +308,12 @@ class BasePipeline(metaclass=ABCMeta):
         #(tf.float32, tf.float32, tf.float32, tf.float32, tf.float32)).batch(batch_size)
         #tf_dataset = lambda: tf.data.Dataset.from_generator(dict(features), output_types = 
         #                                                    (tf.float32,tf.float32,tf.float32)).batch(batch_size)
+        
+        gc.collect()
+        print('start')
         features = pd.DataFrame(features).to_dict('list')
+        print('done')
         for key in features:
-            print(key)
             features[key] = np.array(features[key])
         #print(features)
         if self.config.base_model in [GPTModel, GPTModelSmall]:

@@ -300,7 +300,7 @@ def get_default_config():
 
         # Location of model weights
         base_model=GPTModel,
-        bath_model_path=None,
+        base_model_path=None,
 
         # Possible `SourceModel` specific settings
         n_heads=None,

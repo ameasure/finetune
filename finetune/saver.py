@@ -64,11 +64,12 @@ class SaverHook(_StopOnPredicateHook):
 
 
 class InitializeHook(tf.train.SessionRunHook):
-    def __init__(self, saver):
+    def __init__(self, saver, model_portion = "entire_model"):
         self.saver = saver
+        self.model_portion = model_portion
 
     def after_create_session(self, session, coord):
-        init_fn = self.saver.get_scaffold_init_fn()
+        init_fn = self.saver.get_scaffold_init_fn(self.model_portion)
         init_fn(None, session)
 
 
@@ -127,7 +128,7 @@ class Saver:
         finetune_obj.config = get_config(**dict(finetune_obj.config))
         return finetune_obj
 
-    def get_scaffold_init_fn(self):
+    def get_scaffold_init_fn(self, model_portion=None):
         
         def init_fn(scaffold, session):
             if self.variables is not None:
@@ -135,18 +136,35 @@ class Saver:
             else:
                 variables_sv = dict()
             all_vars = tf.global_variables()
-            if split == 'featurizer':
+            is_dict = False
+            if not all_vars:
+                all_vars = variables_sv
+                is_dict = True
+            if model_portion == 'featurizer':
                 norm_variable_scopes = ['b:0', 'g:0']
-                base = [v for v in all_vars if 'target' not in v.name]
-                all_vars = [v for v in base if 'adapter' in v.name or v.name[-3:] in norm_variable_scopes]
-            else if split == 'target':
-                all_vars = [v for v in all_vars if 'target' in v.name]
+                try:
+                    base = [v for v in all_vars if 'target' not in v.name]
+                    all_vars = [v for v in base if 'adapter' in v.name or v.name[-3:] in norm_variable_scopes]
+                except:
+                    #this means all_vars is a dict (from variables_sv), so cannot have v.name
+                    base = [v for v in all_vars if 'target' not in v]
+                    all_vars = [v for v in base if 'adapter' in v or v[-3:] in norm_variable_scopes]
+            elif model_portion == 'target':
+                try:
+                    all_vars = [v for v in all_vars if 'target' in v.name]
+                except:
+                    all_vars = [v for v in all_vars if 'target' in v]
+
             self.var_val = []
             for var in all_vars:
+                if is_dict:
+                    name = var
+                else:
+                    name = var.name
                 for saved_var_name, saved_var in itertools.chain(variables_sv.items(), self.fallback.items()):
-                    if saved_var_name == var.name:
+                    if saved_var_name == name:
                         for func in self.variable_transforms:
-                            saved_var = func(var.name, saved_var)
+                            saved_var = func(name, saved_var)
                         var.load(saved_var, session)
                         break
                             
