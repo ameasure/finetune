@@ -9,12 +9,14 @@ from abc import ABCMeta, abstractmethod
 import tqdm
 import numpy as np
 import tensorflow as tf
+import pandas as pd
 from tensorflow.python.data import Dataset
 from sklearn.model_selection import train_test_split
 
 
 import finetune
 from finetune.errors import FinetuneError
+from finetune.base_models import GPTModel, GPTModelSmall
 from finetune.encoding.input_encoder import ArrayEncodedOutput, EncodedOutput
 from finetune.util.imbalance import compute_class_weights
 
@@ -291,11 +293,32 @@ class BasePipeline(metaclass=ABCMeta):
     def get_predict_input_fn(self, Xs, batch_size=None):
         batch_size = batch_size or self.config.batch_size
         tf_dataset = lambda: self._dataset_without_targets(Xs, train=None).batch(batch_size)
+        print(tf_dataset())
         return tf_dataset
 
     def get_target_input_fn(self,features,batch_size=None):
         batch_size = batch_size or self.config.batch_size
-        tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(dict(features)).batch(batch_size)
+        if not callable(features):
+            Xs_fn = lambda: self.wrap_tqdm(features, train)
+        else:
+            Xs_fn = lambda: self.wrap_tqdm(features(), train)
+
+        dataset_encoded = lambda: itertools.chain.from_iterable(Xs_fn)
+        #tf_dataset = lambda: tf.data.Dataset.from_generator(features,output_types=
+        #(tf.float32, tf.float32, tf.float32, tf.float32, tf.float32)).batch(batch_size)
+        #tf_dataset = lambda: tf.data.Dataset.from_generator(dict(features), output_types = 
+        #                                                    (tf.float32,tf.float32,tf.float32)).batch(batch_size)
+        features = pd.DataFrame(features).to_dict('list')
+        for key in features:
+            print(key)
+            features[key] = np.array(features[key])
+        #print(features)
+        if self.config.base_model in [GPTModel, GPTModelSmall]:
+            output_types = (tf.float32,tf.float32,tf.float32)
+        else:
+            output_types = (tf.float32,tf.float32)
+        #tf_dataset = lambda: tf.data.Dataset.from_generator(lambda:features, output_types=(tf.float32,tf.float32,tf.float32)).batch(batch_size)
+        tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(features).batch(batch_size)
         return tf_dataset
 
     @property

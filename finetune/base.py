@@ -245,6 +245,11 @@ class BaseModel(object, metaclass=ABCMeta):
         self.resolved_gpus = resolved_gpus
         return distribute_strategy
 
+    def change_weights(self,path):
+        assert self.config.build_separate_estimators,
+        "Must have 'build separate estimators' enabled in config for post-initialization loading."
+        assert self.featurizer_est 
+
     def get_estimator(self, force_build_lm=False):
         conf = tf.ConfigProto(
             allow_soft_placement=self.config.soft_device_placement,
@@ -287,6 +292,27 @@ class BaseModel(object, metaclass=ABCMeta):
         return est, hooks
     
     def get_separate_estimators(self, force_build_lm = False):
+        conf = tf.ConfigProto(
+            allow_soft_placement=self.config.soft_device_placement,
+            log_device_placement=self.config.log_device_placement,
+        )
+        conf.gpu_options.per_process_gpu_memory_fraction = (
+            self.config.per_process_gpu_memory_fraction
+        )
+        distribute_strategy = self._distribute_strategy(self.config.visible_gpus)
+
+        config = tf.estimator.RunConfig(
+            tf_random_seed=self.config.seed,
+            save_summary_steps=self.config.val_interval,
+            save_checkpoints_secs=None,
+            save_checkpoints_steps=None,
+            # disable auto summaries
+            session_config=conf,
+            log_step_count_steps=100,
+            train_distribute=distribute_strategy,
+            keep_checkpoint_max=1
+        )
+
         fns = get_separate_model_fns(
             target_model_fn=self._target_model, 
             predict_op=self._predict_op,
@@ -299,23 +325,25 @@ class BaseModel(object, metaclass=ABCMeta):
             saver=self.saver
         )
 
-        featurizer_est = tf.estimator.Estimator(
+        self.featurizer_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
             model_fn=fns['featurizer_model_fn'],
             config=config,
             params=self.config
         )
 
-        target_est = tf.estimator.Estimator(
+        self.target_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
             model_fn=fns['target_model_fn'],
             config=config,
             params=self.config
         )
 
-        hooks = [InitializeHook(self.saver)]
+        self.
 
-        return featurizer_est, target_est, hooks
+        hooks = [InitializeHook(self.saver),InitializeHook(self.saver)]
+
+        return self.featurizer_est, self.target_est, hooks
 
 
     def close(self):
@@ -403,17 +431,20 @@ class BaseModel(object, metaclass=ABCMeta):
             return self._cached_inference(Xs=Xs, mode=mode)
         else:
             input_fn = self.input_pipeline.get_predict_input_fn(Xs)
+            length = len(Xs) if not callable(Xs) else None
             if self.config.build_separate_estimators:
                 featurizer_est, target_est, hooks = self.get_separate_estimators()
-                features = featurizer_est.predict(input_fn=input_fn, predict_keys=mode, hooks=hooks)
-                #features = tf.data.Dataset.from_tensor_slices(features)
+
+                features =  featurizer_est.predict(
+                        input_fn=input_fn, predict_keys=None, hooks=hooks[0])
 
                 target_fn = self.input_pipeline.get_target_input_fn(features)
+                predictions = target_est.predict(
+                        input_fn=target_fn, predict_keys=mode, hooks=hooks[1])
 
-                self._predictions = target_est.predict(input_fn=target_fn, predict_keys=mode, hooks=hooks)
+                return [pred[mode] if mode else pred for pred in predictions]
             else:
                 estimator, hooks = self.get_estimator()
-                length = len(Xs) if not callable(Xs) else None
 
                 predictions = tqdm.tqdm(
                     estimator.predict(
@@ -422,7 +453,7 @@ class BaseModel(object, metaclass=ABCMeta):
                     total=length,
                     desc="Inference"
                 )
-            return [pred[mode] if mode else pred for pred in predictions]
+                return [pred[mode] if mode else pred for pred in predictions]
 
     def fit(self, *args, **kwargs):
         """ An alias for finetune. """
@@ -430,6 +461,8 @@ class BaseModel(object, metaclass=ABCMeta):
 
     def _predict(self, Xs):
         raw_preds = self._inference(Xs, PredictMode.NORMAL)
+        print(raw_preds)
+        1/0
         return self.input_pipeline.label_encoder.inverse_transform(np.asarray(raw_preds))
 
     def predict(self, Xs):

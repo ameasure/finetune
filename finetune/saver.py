@@ -135,6 +135,12 @@ class Saver:
             else:
                 variables_sv = dict()
             all_vars = tf.global_variables()
+            if split == 'featurizer':
+                norm_variable_scopes = ['b:0', 'g:0']
+                base = [v for v in all_vars if 'target' not in v.name]
+                all_vars = [v for v in base if 'adapter' in v.name or v.name[-3:] in norm_variable_scopes]
+            else if split == 'target':
+                all_vars = [v for v in all_vars if 'target' in v.name]
             self.var_val = []
             for var in all_vars:
                 for saved_var_name, saved_var in itertools.chain(variables_sv.items(), self.fallback.items()):
