@@ -293,20 +293,31 @@ class BasePipeline(metaclass=ABCMeta):
     def get_predict_input_fn(self, Xs, batch_size=None):
         batch_size = batch_size or self.config.batch_size
         tf_dataset = lambda: self._dataset_without_targets(Xs, train=None).batch(batch_size)
-        print(tf_dataset())
         return tf_dataset
 
-    def get_target_input_fn(self,features,batch_size=None):
+    def get_target_input_fn(self,feature_gen,length,batch_size=None):
         batch_size = batch_size or self.config.batch_size
+        #features = pd.DataFrame(features).to_dict('list')
+        #for key in features:
+        #    features[key] = np.array(features[key])
+        #tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(features).batch(batch_size)
+        #list_of_dicts = list(feature_gen)
+        #features = pd.DataFrame(features).to_dict('list')
+        features = [None]*length
+        for i in tqdm.tqdm(range(length), total=length, desc="Featurization"):
+            y = next(feature_gen)
+            features[i] = y
+        if self.config.base_model in [GPTModel, GPTModelSmall]:
+            output_types = (tf.float32, tf.float32, tf.float32)
+        else:
+            output_types = (tf.float32, tf.float32)
+        #tf_dataset = tf.data.Dataset.from_generator(feature_gen,output_types=output_types).batch(batch_size)
         features = pd.DataFrame(features).to_dict('list')
         for key in features:
             features[key] = np.array(features[key])
-        if self.config.base_model in [GPTModel, GPTModelSmall]:
-            output_types = (tf.float32,tf.float32,tf.float32)
-        else:
-            output_types = (tf.float32,tf.float32)
         tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(features).batch(batch_size)
         return tf_dataset
+                                                        
 
     @property
     def pad_idx(self):

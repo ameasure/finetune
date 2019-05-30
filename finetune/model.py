@@ -14,6 +14,7 @@ from finetune.optimizers.adamax import AdamaxWOptimizer
 from finetune.util.imbalance import class_weight_tensor
 from finetune.errors import FinetuneError
 from finetune.base_models import GPTModel, GPTModelSmall
+from finetune.saver import InitializeHook
 
 LOGGER = logging.getLogger('finetune')
 
@@ -324,55 +325,51 @@ def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_
         featurizer_state = features
         task_id = features.get("task_id", None)
         Y = labels
+        if params.base_model in [GPTModel, GPTModelSmall]:
+            predictions[PredictMode.ATTENTION] = featurizer_state['attention_weights']
 
-        with tf.variable_scope(tf.get_variable_scope()):
-            if params.base_model in [GPTModel, GPTModelSmall]:
-                predictions[PredictMode.ATTENTION] = featurizer_state['attention_weights']
-
-            if build_target_model:
-                target_model_state = target_model_op(
-                    featurizer_state=featurizer_state,
-                    Y=Y,
-                    params=params,
-                    mode=mode,
-                    task_id=task_id
-                )
-
-                logits = target_model_state["logits"]
-                predict_params = target_model_state.get("predict_params", {})
-                if "_threshold" in params:
-                    predict_params["threshold"] = params._threshold
-                pred_op = predict_op(logits, **predict_params)
-
-                if type(pred_op) == tuple:
-                    pred_op, pred_proba_op = pred_op
-                else:
-                    pred_proba_op = predict_proba_op(logits, **predict_params)
-
-                if type(pred_op) == dict:
-                    predictions.update(pred_op)
-                    predictions.update(pred_proba_op)
-                else:
-                    predictions[PredictMode.NORMAL] = pred_op
-                    predictions[PredictMode.PROBAS] = pred_proba_op
-
-            if build_lm:
-                lm_predict_op, language_model_state = language_model_op(X=X, M=M, params=params,
-                                                                        featurizer_state=featurizer_state)
-                if mode == tf.estimator.ModeKeys.TRAIN or mode == tf.estimator.ModeKeys.EVAL:
-                    lm_loss = tf.reduce_mean(language_model_state["losses"])
-                    train_loss += lm_loss_coef * lm_loss
-                    tf.summary.scalar("LanguageModelLoss", lm_loss)
-                if mode == tf.estimator.ModeKeys.PREDICT:
-                    predictions[PredictMode.GENERATE_TEXT] = lm_predict_op
-                    predictions[PredictMode.LM_PERPLEXITY] = language_model_state["perplexity"]
-            for key in predictions:
-                print(key)
-                print(predictions[key])
-            return tf.estimator.EstimatorSpec(
+        if build_target_model:
+            target_model_state = target_model_op(
+                featurizer_state=featurizer_state,
+                Y=Y,
+                params=params,
                 mode=mode,
-                predictions=predictions
+                task_id=task_id
             )
+
+            logits = target_model_state["logits"]
+            predict_params = target_model_state.get("predict_params", {})
+            if "_threshold" in params:
+                predict_params["threshold"] = params._threshold
+            pred_op = predict_op(logits, **predict_params)
+
+            if type(pred_op) == tuple:
+                pred_op, pred_proba_op = pred_op
+            else:
+                pred_proba_op = predict_proba_op(logits, **predict_params)
+
+            if type(pred_op) == dict:
+                predictions.update(pred_op)
+                predictions.update(pred_proba_op)
+            else:
+                predictions[PredictMode.NORMAL] = pred_op
+                predictions[PredictMode.PROBAS] = pred_proba_op
+        """
+        if build_lm:
+            lm_predict_op, language_model_state = language_model_op(X=X, M=M, params=params,
+                                                                    featurizer_state=featurizer_state)
+            if mode == tf.estimator.ModeKeys.TRAIN or mode == tf.estimator.ModeKeys.EVAL:
+                lm_loss = tf.reduce_mean(language_model_state["losses"])
+                train_loss += lm_loss_coef * lm_loss
+                tf.summary.scalar("LanguageModelLoss", lm_loss)
+            if mode == tf.estimator.ModeKeys.PREDICT:
+                predictions[PredictMode.GENERATE_TEXT] = lm_predict_op
+                predictions[PredictMode.LM_PERPLEXITY] = language_model_state["perplexity"]
+        """
+        return tf.estimator.EstimatorSpec(
+            mode=mode,
+            predictions=predictions
+        )
 
     return {'target_model_fn':_target_model_fn,'featurizer_model_fn':_featurizer_model_fn}
 

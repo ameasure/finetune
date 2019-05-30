@@ -72,7 +72,6 @@ class InitializeHook(tf.train.SessionRunHook):
         init_fn = self.saver.get_scaffold_init_fn(self.model_portion)
         init_fn(None, session)
 
-
 class Saver:
     def __init__(self, fallback_filename=None, exclude_matches=None, variable_transforms=None, save_dtype=None):
         self.variable_transforms = variable_transforms or []
@@ -177,7 +176,7 @@ class Saver:
                 if fb_var_name == var_name:
                     for func in self.variable_transforms:
                         fb_var = func(var_name, fb_var)
-                    if np.allclose(fb_var, var_val):
+                    if np.allclose(fb_var, var_val) and False:
                         skip = True
                         break
             skips.append(skip)

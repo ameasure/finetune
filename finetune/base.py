@@ -18,6 +18,7 @@ import logging
 
 import tqdm
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from tensorflow.data import Dataset
 from tensorflow.contrib.distribute import OneDeviceStrategy
@@ -62,13 +63,6 @@ class BaseModel(object, metaclass=ABCMeta):
         atexit.register(cleanup)
 
         self.config = get_config(**kwargs)
-        '''
-        if self.config.build_separate_estimators:
-            self.featurization_graph = tf.get_default_graph()
-            self.target_graph = tf.Graph()
-            self.featurization_sess = tf.Session(graph = self.featurization_graph)
-            self.target_sess = tf.Session(graph = self.target_graph)
-        '''
         self.resolved_gpus = None
         self.validate_config()
         self.input_pipeline = self._get_input_pipeline()
@@ -254,27 +248,31 @@ class BaseModel(object, metaclass=ABCMeta):
 
 
     def load_separate(self,path):
+        """
+        Initialize a model with target and featurizer split into two estimators. This allows
+        faster loading and changing weights within a constant architecture in deployment.
+        """
         assert self.config.build_separate_estimators,\
         "Must have 'build separate estimators' enabled in config for post-initialization loading."
         assert self.config.bert_adapter_size is not None,\
         "Must have adapters turned on in config to keep loaded file size low"
-        try:
-            _, _ = self.featurizer_est, self.target_est
-        except:
-            print("Separate estimators not yet created. Creating...")
-            self.saver.load(path)
-            self.get_separate_estimators(path)
+        orig = self.saver.load(path)
+        self.input_pipeline = orig.input_pipeline
+        self.get_separate_estimators(path)
+        self.change_target_next_run = True
+        self.change_featurizer_next_run = True
 
     def change_weights(self,path):
-        #with self.featurization_sess as sess:
+        """
+        Initialize a model with target and featurizer split into two estimators. This allows
+        faster loading and changing weights within a constant architecture in deployment.
+        """
+        assert hasattr(self,'featurizer_est') and hasattr(self,'target_est'), "You must call \
+        load_separate to initialize the model before switching out weights"
         _ = self.saver.load(path)
-        print(tf.global_variables())
-        self.hooks[0].after_create_session(sess,None)
-        print(tf.global_variables())
-        #with self.target_sess as sess:
-        _ = self.saver.load(path)
-        self.hooks[1].after_create_session(sess,None)
 
+    def change_target_model(self,name):
+        pass
 
     def get_estimator(self, force_build_lm=False):
         conf = tf.ConfigProto(
@@ -350,9 +348,14 @@ class BaseModel(object, metaclass=ABCMeta):
             label_encoder=self.input_pipeline.label_encoder,
             saver=self.saver
         )
-       
+        self.target_est = tf.estimator.Estimator(
+            model_dir=self.estimator_dir,
+            model_fn=fns['target_model_fn'],
+            config=config,
+            params=self.config,
+            warm_start_from=load_path
+        )
 
-        #with self.featurization_graph.as_default():
         self.featurizer_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
             model_fn=fns['featurizer_model_fn'],
@@ -361,14 +364,6 @@ class BaseModel(object, metaclass=ABCMeta):
             warm_start_from=load_path
         )
         feat_hook = InitializeHook(self.saver, model_portion='featurizer')
-        #with self.target_graph.as_default():
-        self.target_est = tf.estimator.Estimator(
-            model_dir=self.estimator_dir,
-            model_fn=fns['target_model_fn'],
-            config=config,
-            params=self.config,
-            warm_start_from=load_path
-        )
         target_hook = InitializeHook(self.saver, model_portion='target')
         self.hooks = [feat_hook,target_hook]
         return self.featurizer_est, self.target_est, self.hooks
@@ -397,6 +392,15 @@ class BaseModel(object, metaclass=ABCMeta):
         # Reset counter
         self._to_pull = 0
 
+    def _clear_target_prediction_queue(self):
+        # Flush examples used to pad the last batch
+        # of previous call to predict()
+        for i in range(self._target_to_pull):
+            next(self._target_predictions)
+
+        # Reset counter
+        self._target_to_pull = 0
+
     def _data_generator(self):
         self._cached_example = None
         self._to_pull = 0
@@ -411,6 +415,21 @@ class BaseModel(object, metaclass=ABCMeta):
                 # out of the queue later
                 self._to_pull += 1
                 yield self._cached_example
+    
+    def _target_data_generator(self):
+        self._target_cached_example = None
+        self._target_to_pull = 0
+        while not self._closed:
+            try:
+                self._target_cached_example = self._target_data.pop(0)
+                yield self._target_cached_example
+            except IndexError:
+                # _data_generator was asked for more examples than we had
+                # Feed a cached example through the input_pipeline
+                # to fill out the batch, but remember to clear it
+                # out of the queue later
+                self._target_to_pull += 1
+                yield self._target_cached_example
 
     @contextmanager
     def cached_predict(self):
@@ -429,22 +448,13 @@ class BaseModel(object, metaclass=ABCMeta):
         self._data = Xs
         self._closed = False
         n = len(self._data)
+        if self.config.build_separate_estimators:
+                predictions = self.separate_cached_inference(Xs,mode)
+                return predictions
         if self._predictions is None:
             input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
-            if self.config.build_separate_estimators:
-                featurizer_est, target_est, hooks = self.get_separate_estimators()
-
-                features = featurizer_est.predict(
-                        input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
-
-                target_fn = self.input_pipeline.get_target_input_fn(features)
-                self.predictions = target_est.predict(
-                        input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
-
-                self._predictions = target_est.predict(input_fn=target_fn, predict_keys=mode, hooks=hooks)
-            else:
-                _estimator, hooks = self.get_estimator()
-                self._predictions = _estimator.predict(input_fn=input_fn, predict_keys=mode, hooks=hooks)
+            _estimator, hooks = self.get_estimator()
+            self._predictions = _estimator.predict(input_fn=input_fn, predict_keys=mode, hooks=hooks)
 
         self._clear_prediction_queue()
 
@@ -456,6 +466,31 @@ class BaseModel(object, metaclass=ABCMeta):
 
         return predictions
 
+
+    def separate_cached_inference(self,Xs,mode=None):
+        n = len(self._data)
+        hooks =self.hooks
+        input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
+        self.get_separate_estimators()
+        features =  self.featurizer_est.predict(
+                input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
+        target_fn = self.input_pipeline.get_target_input_fn(features,n)
+        self._clear_prediction_queue()
+        self._predictions = self.target_est.predict(
+                input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
+        preds = [None]*n
+        for i in tqdm.tqdm(range(n), total=n, desc="Inference"):
+            y = next(self._predictions)
+            y = y[mode] if mode else y
+            preds[i] = y
+        print(preds)
+        #preds = pd.DataFrame(preds).to_dict('list')
+        #print(preds)
+        #for key in preds:
+        #    preds[key] = np.array(preds[key])
+        self._clear_prediction_queue
+        return preds
+
     def _inference(self, Xs, mode=None):
         Xs = self.input_pipeline._format_for_inference(Xs)
         if self._cached_predict:
@@ -463,21 +498,14 @@ class BaseModel(object, metaclass=ABCMeta):
         else:
             length = len(Xs) if not callable(Xs) else None
             if self.config.build_separate_estimators:
-                try:
-                    featurizer_est, target_est, hooks = self.featurizer_est, self.target_est, self.hooks
-                except:
-                    print("Creating new estimators... Please load weights")
-                    featurizer_est, target_est, hooks = self.get_separate_estimators()
-                #with self.featurization_graph.as_default():
+                hooks =self.hooks
                 input_fn = self.input_pipeline.get_predict_input_fn(Xs)
-                features =  featurizer_est.predict(
+                features =  self.featurizer_est.predict(
                         input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
-                #with self.target_graph.as_default():
                 target_fn = self.input_pipeline.get_target_input_fn(features)
-                predictions = target_est.predict(
+                predictions = self.target_est.predict(
                         input_fn=target_fn, predict_keys=None, hooks=[hooks[1]])
                 return [pred[mode] if mode else pred for pred in predictions]
-
             else:
                 input_fn = self.input_pipeline.get_predict_input_fn(Xs)
                 estimator, hooks = self.get_estimator()
@@ -498,7 +526,7 @@ class BaseModel(object, metaclass=ABCMeta):
     def _predict(self, Xs):
         raw_preds = self._inference(Xs, PredictMode.NORMAL)
         print(raw_preds)
-        1/0
+        print(np.shape(raw_preds))
         return self.input_pipeline.label_encoder.inverse_transform(np.asarray(raw_preds))
 
     def predict(self, Xs):
