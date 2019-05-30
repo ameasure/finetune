@@ -62,6 +62,13 @@ class BaseModel(object, metaclass=ABCMeta):
         atexit.register(cleanup)
 
         self.config = get_config(**kwargs)
+        '''
+        if self.config.build_separate_estimators:
+            self.featurization_graph = tf.get_default_graph()
+            self.target_graph = tf.Graph()
+            self.featurization_sess = tf.Session(graph = self.featurization_graph)
+            self.target_sess = tf.Session(graph = self.target_graph)
+        '''
         self.resolved_gpus = None
         self.validate_config()
         self.input_pipeline = self._get_input_pipeline()
@@ -245,32 +252,28 @@ class BaseModel(object, metaclass=ABCMeta):
         self.resolved_gpus = resolved_gpus
         return distribute_strategy
 
-    def change_weights(self,path):
+
+    def load_separate(self,path):
         assert self.config.build_separate_estimators,\
         "Must have 'build separate estimators' enabled in config for post-initialization loading."
         assert self.config.bert_adapter_size is not None,\
         "Must have adapters turned on in config to keep loaded file size low"
         try:
-            x = self.featurizer_est
-            y = self.target_est
+            _, _ = self.featurizer_est, self.target_est
         except:
             print("Separate estimators not yet created. Creating...")
-            self.get_separate_estimators()
-        #self.cached_predict()
-        print("beginning load")
+            self.saver.load(path)
+            self.get_separate_estimators(path)
+
+    def change_weights(self,path):
+        #with self.featurization_sess as sess:
+        _ = self.saver.load(path)
         print(tf.global_variables())
-        with self.featurization_sess as sess:
-            _ = self.saver.load(path)
-            feat_sess = tf.Session()
-            print(tf.global_variables())
-            self.hooks[0].after_create_session(sess,None)
-            print(tf.global_variables())
-        with self.target_sess as sess:
-            _ = self.saver.load(path)
-            target_sess = tf.Session()
-            self.hooks[1].after_create_session(sess,None)
-
-
+        self.hooks[0].after_create_session(sess,None)
+        print(tf.global_variables())
+        #with self.target_sess as sess:
+        _ = self.saver.load(path)
+        self.hooks[1].after_create_session(sess,None)
 
 
     def get_estimator(self, force_build_lm=False):
@@ -314,7 +317,7 @@ class BaseModel(object, metaclass=ABCMeta):
         )
         return est, hooks
     
-    def get_separate_estimators(self, force_build_lm = False):
+    def get_separate_estimators(self, force_build_lm = False, load_path=None):
         conf = tf.ConfigProto(
             allow_soft_placement=self.config.soft_device_placement,
             log_device_placement=self.config.log_device_placement,
@@ -347,29 +350,27 @@ class BaseModel(object, metaclass=ABCMeta):
             label_encoder=self.input_pipeline.label_encoder,
             saver=self.saver
         )
-        self.featurization_graph = tf.Graph()
-        self.target_graph = tf.Graph()
-        self.target_sess = tf.Session(graph = self.featurization_graph)
-        self.featurization_sess = tf.Session(graph = self.target_graph)
+       
 
-        with self.featurization_graph.as_default():
-            self.featurizer_est = tf.estimator.Estimator(
-                model_dir=self.estimator_dir,
-                model_fn=fns['featurizer_model_fn'],
-                config=config,
-                params=self.config
-            )
-            feat_hook = InitializeHook(self.saver, model_portion='featurizer')
-        with self.target_graph.as_default():
-            self.target_est = tf.estimator.Estimator(
-                model_dir=self.estimator_dir,
-                model_fn=fns['target_model_fn'],
-                config=config,
-                params=self.config
-            )
-            target_hook = InitializeHook(self.saver, model_portion='target')
+        #with self.featurization_graph.as_default():
+        self.featurizer_est = tf.estimator.Estimator(
+            model_dir=self.estimator_dir,
+            model_fn=fns['featurizer_model_fn'],
+            config=config,
+            params=self.config,
+            warm_start_from=load_path
+        )
+        feat_hook = InitializeHook(self.saver, model_portion='featurizer')
+        #with self.target_graph.as_default():
+        self.target_est = tf.estimator.Estimator(
+            model_dir=self.estimator_dir,
+            model_fn=fns['target_model_fn'],
+            config=config,
+            params=self.config,
+            warm_start_from=load_path
+        )
+        target_hook = InitializeHook(self.saver, model_portion='target')
         self.hooks = [feat_hook,target_hook]
-        
         return self.featurizer_est, self.target_est, self.hooks
 
 
@@ -460,21 +461,25 @@ class BaseModel(object, metaclass=ABCMeta):
         if self._cached_predict:
             return self._cached_inference(Xs=Xs, mode=mode)
         else:
-            input_fn = self.input_pipeline.get_predict_input_fn(Xs)
             length = len(Xs) if not callable(Xs) else None
             if self.config.build_separate_estimators:
-                featurizer_est, target_est, hooks = self.get_separate_estimators()
-
-                with self.featurization_graph.as_default():
-                    features =  featurizer_est.predict(
-                            input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
-                with self.target_graph.as_default():
-                    target_fn = self.input_pipeline.get_target_input_fn(features)
-                    predictions = target_est.predict(
-                            input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
-
+                try:
+                    featurizer_est, target_est, hooks = self.featurizer_est, self.target_est, self.hooks
+                except:
+                    print("Creating new estimators... Please load weights")
+                    featurizer_est, target_est, hooks = self.get_separate_estimators()
+                #with self.featurization_graph.as_default():
+                input_fn = self.input_pipeline.get_predict_input_fn(Xs)
+                features =  featurizer_est.predict(
+                        input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
+                #with self.target_graph.as_default():
+                target_fn = self.input_pipeline.get_target_input_fn(features)
+                predictions = target_est.predict(
+                        input_fn=target_fn, predict_keys=None, hooks=[hooks[1]])
                 return [pred[mode] if mode else pred for pred in predictions]
+
             else:
+                input_fn = self.input_pipeline.get_predict_input_fn(Xs)
                 estimator, hooks = self.get_estimator()
 
                 predictions = tqdm.tqdm(

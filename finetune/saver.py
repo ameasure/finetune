@@ -131,43 +131,42 @@ class Saver:
     def get_scaffold_init_fn(self, model_portion=None):
         
         def init_fn(scaffold, session):
+            self.var_val = []
             if self.variables is not None:
                 variables_sv = self.variables
             else:
                 variables_sv = dict()
             all_vars = tf.global_variables()
             is_dict = False
-            if not all_vars:
-                all_vars = variables_sv
+            if model_portion != 'entire_model': #we must be loading in the case of two separate estimators
                 is_dict = True
-            if model_portion == 'featurizer':
-                norm_variable_scopes = ['b:0', 'g:0']
-                try:
-                    base = [v for v in all_vars if 'target' not in v.name]
-                    all_vars = [v for v in base if 'adapter' in v.name or v.name[-3:] in norm_variable_scopes]
-                except:
-                    #this means all_vars is a dict (from variables_sv), so cannot have v.name
-                    base = [v for v in all_vars if 'target' not in v]
-                    all_vars = [v for v in base if 'adapter' in v or v[-3:] in norm_variable_scopes]
-            elif model_portion == 'target':
-                try:
-                    all_vars = [v for v in all_vars if 'target' in v.name]
-                except:
-                    all_vars = [v for v in all_vars if 'target' in v]
-
-            self.var_val = []
-            for var in all_vars:
-                if is_dict:
-                    name = var
-                else:
+                assert model_portion in ['featurizer','target'], "Must be using separate estimators if loading before graph creation"
+                trainables = variables_sv
+                if model_portion == 'featurizer':
+                    norm_variable_scopes = ['b:0', 'g:0']
+                    base = [v for v in trainables if 'target' not in v]
+                    trainables = [v for v in base if 'adapter' in v or v[-3:] in norm_variable_scopes]    
+                elif model_portion == 'target':
+                    trainables = [v for v in trainables if 'target' in v]
+                all_vars = [v for v in all_vars if v.name in trainables]
+                for var in all_vars:
                     name = var.name
-                for saved_var_name, saved_var in itertools.chain(variables_sv.items(), self.fallback.items()):
-                    if saved_var_name == name:
-                        for func in self.variable_transforms:
-                            saved_var = func(name, saved_var)
-                        var.load(saved_var, session)
-                        break
-                            
+                    for saved_var_name, saved_var in itertools.chain(variables_sv.items(), all_vars):
+                        if saved_var_name == name:
+                            for func in self.variable_transforms:
+                                saved_var = func(name, saved_var)
+                            var.load(saved_var, session)
+                            break
+            else:
+                for var in all_vars:
+                    name = var.name
+                    for saved_var_name, saved_var in itertools.chain(variables_sv.items(), self.fallback.items()):
+                        if saved_var_name == name:
+                            for func in self.variable_transforms:
+                                saved_var = func(name, saved_var)
+                            var.load(saved_var, session)
+                            break
+                                
         return init_fn
 
     def remove_unchanged(self, variable_names, variable_values, fallback_vars):

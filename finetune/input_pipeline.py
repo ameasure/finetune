@@ -298,29 +298,13 @@ class BasePipeline(metaclass=ABCMeta):
 
     def get_target_input_fn(self,features,batch_size=None):
         batch_size = batch_size or self.config.batch_size
-        if not callable(features):
-            Xs_fn = lambda: self.wrap_tqdm(features, train)
-        else:
-            Xs_fn = lambda: self.wrap_tqdm(features(), train)
-
-        dataset_encoded = lambda: itertools.chain.from_iterable(Xs_fn)
-        #tf_dataset = lambda: tf.data.Dataset.from_generator(features,output_types=
-        #(tf.float32, tf.float32, tf.float32, tf.float32, tf.float32)).batch(batch_size)
-        #tf_dataset = lambda: tf.data.Dataset.from_generator(dict(features), output_types = 
-        #                                                    (tf.float32,tf.float32,tf.float32)).batch(batch_size)
-        
-        gc.collect()
-        print('start')
         features = pd.DataFrame(features).to_dict('list')
-        print('done')
         for key in features:
             features[key] = np.array(features[key])
-        #print(features)
         if self.config.base_model in [GPTModel, GPTModelSmall]:
             output_types = (tf.float32,tf.float32,tf.float32)
         else:
             output_types = (tf.float32,tf.float32)
-        #tf_dataset = lambda: tf.data.Dataset.from_generator(lambda:features, output_types=(tf.float32,tf.float32,tf.float32)).batch(batch_size)
         tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(features).batch(batch_size)
         return tf_dataset
 

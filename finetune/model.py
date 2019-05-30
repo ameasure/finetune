@@ -301,7 +301,7 @@ def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_
             outputs[key] = value
 
         predictions = {'features':featurizer_state['features'],
-                       'sequence_features':featurizer_state['sequence_features']}
+                    'sequence_features':featurizer_state['sequence_features']}
         
         if params.base_model in [GPTModel, GPTModelSmall]:
             predictions['attention_weights'] = featurizer_state['attention_weights']
@@ -317,10 +317,6 @@ def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_
         build_target_model = True
         if params.base_model.is_bidirectional and build_lm:
             raise ValueError("Bert models do not support functions that require the language model.")
-        if not build_target_model:
-            lm_loss_coef = 1.
-        else:
-            lm_loss_coef = params.lm_loss_coef
 
         estimator_mode = mode
         pred_op = None
