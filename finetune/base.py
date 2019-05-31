@@ -256,7 +256,9 @@ class BaseModel(object, metaclass=ABCMeta):
         "Must have 'build separate estimators' enabled in config for post-initialization loading."
         assert self.config.bert_adapter_size is not None,\
         "Must have adapters turned on in config to keep loaded file size low"
+        self._load_path = path
         orig = self.saver.load(path)
+        self.need_to_refresh = True
         self.input_pipeline = orig.input_pipeline
         self.get_separate_estimators(path)
         self.change_target_next_run = True
@@ -269,7 +271,11 @@ class BaseModel(object, metaclass=ABCMeta):
         """
         assert hasattr(self,'featurizer_est') and hasattr(self,'target_est'), "You must call \
         load_separate to initialize the model before switching out weights"
+        for hook in self.hooks:
+            hook.need_to_refresh = True
+        self.need_to_refresh = True
         _ = self.saver.load(path)
+        self._load_path = path
 
     def change_target_model(self,name):
         pass
@@ -334,23 +340,23 @@ class BaseModel(object, metaclass=ABCMeta):
             session_config=conf,
             log_step_count_steps=100,
             train_distribute=distribute_strategy,
-            keep_checkpoint_max=1
+            keep_checkpoint_max=0
         )
-
-        fns = get_separate_model_fns(
-            target_model_fn=self._target_model, 
-            predict_op=self._predict_op,
-            predict_proba_op=self._predict_proba_op,
-            build_target_model=self.input_pipeline.target_dim is not None,
-            build_lm=force_build_lm or self.config.lm_loss_coef > 0.0,
-            encoder=self.input_pipeline.text_encoder,
-            target_dim=self.input_pipeline.target_dim,
-            label_encoder=self.input_pipeline.label_encoder,
-            saver=self.saver
+        if self.need_to_refresh or hasattr(self, 'fns'):
+            self.fns = get_separate_model_fns(
+                target_model_fn=self._target_model, 
+                predict_op=self._predict_op,
+                predict_proba_op=self._predict_proba_op,
+                build_target_model=self.input_pipeline.target_dim is not None,
+                build_lm=force_build_lm or self.config.lm_loss_coef > 0.0,
+                encoder=self.input_pipeline.text_encoder,
+                target_dim=self.input_pipeline.target_dim,
+                label_encoder=self.input_pipeline.label_encoder,
+                saver=self.saver
         )
         self.target_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
-            model_fn=fns['target_model_fn'],
+            model_fn=self.fns['target_model_fn'],
             config=config,
             params=self.config,
             warm_start_from=load_path
@@ -358,11 +364,12 @@ class BaseModel(object, metaclass=ABCMeta):
 
         self.featurizer_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
-            model_fn=fns['featurizer_model_fn'],
+            model_fn=self.fns['featurizer_model_fn'],
             config=config,
             params=self.config,
             warm_start_from=load_path
         )
+
         feat_hook = InitializeHook(self.saver, model_portion='featurizer')
         target_hook = InitializeHook(self.saver, model_portion='target')
         self.hooks = [feat_hook,target_hook]
@@ -468,28 +475,50 @@ class BaseModel(object, metaclass=ABCMeta):
 
 
     def separate_cached_inference(self,Xs,mode=None):
+        from tensorflow.python.framework.ops import _default_session_stack as ds
+        self.get_separate_estimators()
+        ds._enforce_nesting = False
         n = len(self._data)
         hooks =self.hooks
         input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
-        self.get_separate_estimators()
-        features =  self.featurizer_est.predict(
+        #self.get_separate_estimators()
+        output =  self.featurizer_est.predict(
                 input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
-        target_fn = self.input_pipeline.get_target_input_fn(features,n)
+
+        features = [None]*n
+        for i in tqdm.tqdm(range(n), total=n, desc="Featurization"):
+            y = next(output)
+            features[i] = y
+        #features = pd.DataFrame(features).to_dict('list')
+        #for key in features:
+        #    features[key] = np.array(features[key])
+        self._target_data = features
+
         self._clear_prediction_queue()
-        self._predictions = self.target_est.predict(
+        del self.featurizer_est
+        import gc
+        gc.collect()
+        target_fn = self.input_pipeline.get_target_input_fn(self._target_data_generator)
+        self._target_predictions = self.target_est.predict(
                 input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
         preds = [None]*n
         for i in tqdm.tqdm(range(n), total=n, desc="Inference"):
-            y = next(self._predictions)
+            y = next(self._target_predictions)
             y = y[mode] if mode else y
             preds[i] = y
-        print(preds)
+        #print(preds)
         #preds = pd.DataFrame(preds).to_dict('list')
         #print(preds)
         #for key in preds:
         #    preds[key] = np.array(preds[key])
-        self._clear_prediction_queue
+        if self._predictions is not None:
+            self._clear_target_prediction_queue()
+            self._clear_prediction_queue()
+        for hook in self.hooks:
+            hook.need_to_refresh = False
         return preds
+
+    
 
     def _inference(self, Xs, mode=None):
         Xs = self.input_pipeline._format_for_inference(Xs)
@@ -525,8 +554,6 @@ class BaseModel(object, metaclass=ABCMeta):
 
     def _predict(self, Xs):
         raw_preds = self._inference(Xs, PredictMode.NORMAL)
-        print(raw_preds)
-        print(np.shape(raw_preds))
         return self.input_pipeline.label_encoder.inverse_transform(np.asarray(raw_preds))
 
     def predict(self, Xs):
