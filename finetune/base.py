@@ -261,21 +261,23 @@ class BaseModel(object, metaclass=ABCMeta):
         self.need_to_refresh = True
         self.input_pipeline = orig.input_pipeline
         self.get_separate_estimators(path)
-        self.change_target_next_run = True
-        self.change_featurizer_next_run = True
 
     def change_weights(self,path):
         """
         Initialize a model with target and featurizer split into two estimators. This allows
-        faster loading and changing weights within a constant architecture in deployment.
+        faster loading and changing weights within a constant neural architecture in deployment.
         """
         assert hasattr(self,'featurizer_est') and hasattr(self,'target_est'), "You must call \
         load_separate to initialize the model before switching out weights"
+        self.need_to_refresh = True
+        orig = self.saver.load(path)
+        self.input_pipeline = orig.input_pipeline
+        self._load_path = path
+        del self.featurizer_est
+        del self.target_est
+        self.get_separate_estimators(path)
         for hook in self.hooks:
             hook.need_to_refresh = True
-        self.need_to_refresh = True
-        _ = self.saver.load(path)
-        self._load_path = path
 
     def change_target_model(self,name):
         pass
@@ -354,20 +356,21 @@ class BaseModel(object, metaclass=ABCMeta):
                 label_encoder=self.input_pipeline.label_encoder,
                 saver=self.saver
         )
+
         self.target_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
             model_fn=self.fns['target_model_fn'],
             config=config,
-            params=self.config,
-            warm_start_from=load_path
+            params=self.config
+            #warm_start_from=load_path
         )
 
         self.featurizer_est = tf.estimator.Estimator(
             model_dir=self.estimator_dir,
             model_fn=self.fns['featurizer_model_fn'],
             config=config,
-            params=self.config,
-            warm_start_from=load_path
+            params=self.config
+            #warm_start_from=load_path
         )
 
         feat_hook = InitializeHook(self.saver, model_portion='featurizer')
@@ -475,47 +478,49 @@ class BaseModel(object, metaclass=ABCMeta):
 
 
     def separate_cached_inference(self,Xs,mode=None):
-        from tensorflow.python.framework.ops import _default_session_stack as ds
-        self.get_separate_estimators()
-        ds._enforce_nesting = False
+        features = None
+        #self.get_separate_estimators()
         n = len(self._data)
         hooks =self.hooks
         input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
         #self.get_separate_estimators()
-        output =  self.featurizer_est.predict(
-                input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
-
+        if self._predictions is None:
+            self._predictions =  self.featurizer_est.predict(
+                    input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
+            hooks[0].need_to_refresh = False
+        self._clear_prediction_queue()
         features = [None]*n
         for i in tqdm.tqdm(range(n), total=n, desc="Featurization"):
-            y = next(output)
+            y = next(self._predictions)
             features[i] = y
         #features = pd.DataFrame(features).to_dict('list')
         #for key in features:
         #    features[key] = np.array(features[key])
-        self._target_data = features
+        #self._target_data = features
 
-        self._clear_prediction_queue()
-        del self.featurizer_est
-        import gc
-        gc.collect()
-        target_fn = self.input_pipeline.get_target_input_fn(self._target_data_generator)
-        self._target_predictions = self.target_est.predict(
-                input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
+        #self._clear_prediction_queue()
+        preds = None
+        if features is not None:
+            target_fn = self.input_pipeline.get_target_input_fn_slice(features)
+            preds = self.target_est.predict(
+                    input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
+            preds = [pred[mode] if mode else pred for pred in preds]
+            hooks[1].need_to_refresh = False
+        '''       
         preds = [None]*n
         for i in tqdm.tqdm(range(n), total=n, desc="Inference"):
             y = next(self._target_predictions)
             y = y[mode] if mode else y
             preds[i] = y
+        '''
         #print(preds)
         #preds = pd.DataFrame(preds).to_dict('list')
         #print(preds)
         #for key in preds:
         #    preds[key] = np.array(preds[key])
         if self._predictions is not None:
-            self._clear_target_prediction_queue()
+            #self._clear_target_prediction_queue()
             self._clear_prediction_queue()
-        for hook in self.hooks:
-            hook.need_to_refresh = False
         return preds
 
     
@@ -527,6 +532,7 @@ class BaseModel(object, metaclass=ABCMeta):
         else:
             length = len(Xs) if not callable(Xs) else None
             if self.config.build_separate_estimators:
+                1/0
                 hooks =self.hooks
                 input_fn = self.input_pipeline.get_predict_input_fn(Xs)
                 features =  self.featurizer_est.predict(
@@ -554,6 +560,7 @@ class BaseModel(object, metaclass=ABCMeta):
 
     def _predict(self, Xs):
         raw_preds = self._inference(Xs, PredictMode.NORMAL)
+        print(raw_preds)
         return self.input_pipeline.label_encoder.inverse_transform(np.asarray(raw_preds))
 
     def predict(self, Xs):

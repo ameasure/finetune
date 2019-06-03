@@ -308,7 +308,7 @@ class BasePipeline(metaclass=ABCMeta):
         batch_size = batch_size or self.config.batch_size
         TS = tf.TensorShape
         shapes ={
-                    "features": TS([768,]),
+                    "features": TS([768,]), 
                     "sequence_features": TS([self.config.max_length,768]),
                     "attention_weights": TS([12,512,512])
                 }
@@ -321,7 +321,15 @@ class BasePipeline(metaclass=ABCMeta):
         tf_dataset = lambda: tf.data.Dataset.from_generator(dataset_encoded,output_types=output_types).batch(batch_size)
         #tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(features).batch(batch_size)
         return tf_dataset
-                                                        
+
+    def get_target_input_fn_slice(self, features, batch_size=None):
+        batch_size = batch_size or self.config.batch_size
+        features = pd.DataFrame(features).to_dict('list')
+        for key in features:
+            features[key] = np.array(features[key])
+        tf_dataset = lambda: tf.data.Dataset.from_tensor_slices(dict(features)).batch(batch_size)
+        return tf_dataset
+
     def _encode_separate_inference(self,Xs):
         from collections import namedtuple
         EncodedInput = namedtuple("EncodedInput", [

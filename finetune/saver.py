@@ -74,8 +74,16 @@ class InitializeHook(tf.train.SessionRunHook):
 
     def after_create_session(self, session, coord):        
         if self.need_to_refresh:
-            init_fn = self.saver.get_scaffold_init_fn(self.model_portion)
-            init_fn(None, session)
+            init_fn = self.saver.get_scaffold_init_fn()
+            init_fn(None, session,self.model_portion)
+
+    def before_run(self, run_context):
+        print('Before run in ' + self.model_portion)
+        print("Refresh:" + str(self.need_to_refresh))
+        if self.model_portion=='featurizer':#self.need_to_refresh and self.model_portion == 'featurizer':
+            print("before run, initializing")
+            init_fn = self.saver.get_scaffold_init_fn()
+            init_fn(None, run_context.session,self.model_portion)
 
 class Saver:
     def __init__(self, fallback_filename=None, exclude_matches=None, variable_transforms=None, save_dtype=None):
@@ -132,9 +140,9 @@ class Saver:
         finetune_obj.config = get_config(**dict(finetune_obj.config))
         return finetune_obj
 
-    def get_scaffold_init_fn(self, model_portion=None):
+    def get_scaffold_init_fn(self):
         
-        def init_fn(scaffold, session):
+        def init_fn(scaffold, session, model_portion=None):
             self.var_val = []
             if self.variables is not None:
                 variables_sv = self.variables
@@ -143,6 +151,8 @@ class Saver:
             all_vars = tf.global_variables()
             is_dict = False
             if model_portion != 'entire_model': #we must be loading in the case of two separate estimators
+                print("loading variables for")
+                print(model_portion)
                 is_dict = True
                 assert model_portion in ['featurizer','target'], "Must be using separate estimators if loading before graph creation"
                 trainables = variables_sv
@@ -170,7 +180,6 @@ class Saver:
                                 saved_var = func(name, saved_var)
                             var.load(saved_var, session)
                             break
-                                
         return init_fn
 
     def remove_unchanged(self, variable_names, variable_values, fallback_vars):
