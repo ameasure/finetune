@@ -252,10 +252,6 @@ class BaseModel(object, metaclass=ABCMeta):
         Initialize a model with target and featurizer split into two estimators. This allows
         faster loading and changing weights within a constant architecture in deployment.
         """
-        #assert self.config.build_separate_estimators,\
-        #"Must have 'build separate estimators' enabled in config for post-initialization loading."
-        #assert self.config.bert_adapter_size is not None,\
-        #"Must have adapters turned on in config to keep loaded file size low"
         model = cls()
         model._load_path = path
         
@@ -292,8 +288,6 @@ class BaseModel(object, metaclass=ABCMeta):
 
         self.input_pipeline = orig.input_pipeline
         self._load_path = path
-        #del self.featurizer_est
-        #del self.target_est
         self.get_separate_estimators(path)
         for hook in self.hooks:
             hook.need_to_refresh = True
@@ -382,7 +376,6 @@ class BaseModel(object, metaclass=ABCMeta):
             model_fn=self.fns['target_model_fn'],
             config=config,
             params=self.config
-            #warm_start_from=load_path
         )
 
         self.featurizer_est = tf.estimator.Estimator(
@@ -390,7 +383,6 @@ class BaseModel(object, metaclass=ABCMeta):
             model_fn=self.fns['featurizer_model_fn'],
             config=config,
             params=self.config
-            #warm_start_from=load_path
         )
 
         if hasattr(self,'hooks'):
@@ -426,15 +418,6 @@ class BaseModel(object, metaclass=ABCMeta):
         # Reset counter
         self._to_pull = 0
 
-    def _clear_target_prediction_queue(self):
-        # Flush examples used to pad the last batch
-        # of previous call to predict()
-        for i in range(self._target_to_pull):
-            next(self._target_predictions)
-
-        # Reset counter
-        self._target_to_pull = 0
-
     def _data_generator(self):
         self._cached_example = None
         self._to_pull = 0
@@ -449,21 +432,6 @@ class BaseModel(object, metaclass=ABCMeta):
                 # out of the queue later
                 self._to_pull += 1
                 yield self._cached_example
-    
-    def _target_data_generator(self):
-        self._target_cached_example = None
-        self._target_to_pull = 0
-        while not self._closed:
-            try:
-                self._target_cached_example = self._target_data.pop(0)
-                yield self._target_cached_example
-            except IndexError:
-                # _data_generator was asked for more examples than we had
-                # Feed a cached example through the input_pipeline
-                # to fill out the batch, but remember to clear it
-                # out of the queue later
-                self._target_to_pull += 1
-                yield self._target_cached_example
 
     @contextmanager
     def cached_predict(self):
@@ -506,51 +474,22 @@ class BaseModel(object, metaclass=ABCMeta):
         n = len(self._data)
         self.get_separate_estimators()
         hooks =self.hooks
-        print('get in put fn')
         input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
-        print('featurizer queue')
         if self._predictions is None:
             self._predictions =  self.featurizer_est.predict(
                     input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
             self.hooks[0].model_portion = 'featurizer'
-            #hooks[0].need_to_refresh = False
         self._clear_prediction_queue()
-        print('pulling generator')
         features = [None]*n
         for i in tqdm.tqdm(range(n), total=n, desc="Featurization"):
             y = next(self._predictions)
             features[i] = y
-        #features = pd.DataFrame(features).to_dict('list')
-        #for key in features:
-        #    features[key] = np.array(features[key])
-        #self._target_data = features
-
-        #self._clear_prediction_queue()
-        print('target queue')
         preds = None
         if features is not None:
-            print('get target input fn')
             target_fn = self.input_pipeline.get_target_input_fn_slice(features)
-            print('target predict')
             preds = self.target_est.predict(
                     input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
             preds = [pred[mode] if mode else pred for pred in preds]
-        else:
-            print("SKIPPED")
-            #hooks[1].need_to_refresh = False
-        '''       
-        preds = [None]*n
-        for i in tqdm.tqdm(range(n), total=n, desc="Inference"):
-            y = next(self._target_predictions)
-            y = y[mode] if mode else y
-            preds[i] = y
-        '''
-        #print(preds)
-        #preds = pd.DataFrame(preds).to_dict('list')
-        #print(preds)
-        #for key in preds:
-        #    preds[key] = np.array(preds[key])
-        print('clear prediction queue')
         if self._predictions is not None:
             self._clear_prediction_queue()
         return preds

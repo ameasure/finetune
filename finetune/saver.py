@@ -71,10 +71,8 @@ class InitializeHook(tf.train.SessionRunHook):
 
     def after_create_session(self, session, coord):        
         if self.model_portion != 'entire_model' and self.need_to_refresh:
-            print('AFTER CREATE SESSION '+self.model_portion + ' '+ str(self.need_to_refresh))
             init_fn = self.saver.get_scaffold_init_fn()
             if self.model_portion == 'target':
-                #print('refreshing after create session with model: ' + self.model_portion)
                 init_fn(None, session,self.model_portion)
             else:
                 init_fn(None, session,'whole_featurizer') #featurizer session only created upon start cached_predict, so load all weights
@@ -84,9 +82,7 @@ class InitializeHook(tf.train.SessionRunHook):
             init_fn(None, session,self.model_portion)
 
     def before_run(self, run_context):
-        #print('BEFORE RUN '+self.model_portion + ' '+ str(self.need_to_refresh))
         if self.model_portion=='featurizer' and self.need_to_refresh:
-            #print("before run, initializing")
             init_fn = self.saver.get_scaffold_init_fn()
             init_fn(None, run_context.session,self.model_portion)
             self.need_to_refresh=False
@@ -157,8 +153,6 @@ class Saver:
             all_vars = tf.global_variables()
 
             if model_portion != 'entire_model': #we must be loading in the case of two separate estimators
-                print("loading variables for")
-                print(model_portion)
                 assert model_portion in ['featurizer','target','whole_featurizer'], "Must be using separate estimators if loading before graph creation"
                 base = [v for v in all_vars if 'target' not in v.name]
                 if model_portion == 'whole_featurizer':
