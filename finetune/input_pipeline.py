@@ -323,7 +323,8 @@ class BasePipeline(metaclass=ABCMeta):
         return tf_dataset
 
     def get_target_input_fn_slice(self, features, batch_size=None):
-        batch_size = batch_size or self.config.batch_size
+        batch_size = min(len(features),64)
+        #batch_size = batch_size or self.config.batch_size
         features = pd.DataFrame(features).to_dict('list')
         for key in features:
             features[key] = np.array(features[key])
