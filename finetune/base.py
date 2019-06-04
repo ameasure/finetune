@@ -15,6 +15,7 @@ import glob
 from contextlib import contextmanager
 import pathlib
 import logging
+from collections import namedtuple
 
 import tqdm
 import numpy as np
@@ -258,15 +259,16 @@ class BaseModel(object, metaclass=ABCMeta):
         orig = model.saver.load(path)
         model.config = orig.config
         model.saver.set_fallback(model.config.base_model_path)
-        assert orig.config.bert_adapter_size is not None,\
-        "Must have adapters turned on in savefile config to keep loaded file size low"
+        if orig.config.adapter_size is None:
+            raise FinetuneError("The file you are trying to load from has the adapter_size set to None. Must be using adapters\
+            in order to use efficient separate estimator loading.")
         model.config.build_separate_estimator = True
         
         model.need_to_refresh = True
         model.input_pipeline = orig.input_pipeline
         model.get_separate_estimators(path)
-        model.hooks[0].model_portion = 'whole_featurizer'
-        for hook in model.hooks:
+        model.predict_hooks.feat_hook.model_portion = 'whole_featurizer'
+        for hook in model.predict_hooks:
             hook.need_to_refresh = True
         return model
 
@@ -275,8 +277,9 @@ class BaseModel(object, metaclass=ABCMeta):
         Initialize a model with target and featurizer split into two estimators. This allows
         faster loading and changing weights within a constant neural architecture in deployment.
         """
-        assert hasattr(self,'featurizer_est') and hasattr(self,'target_est'), "You must call \
-        load_separate to initialize the model before switching out weights"
+
+        if not hasattr(self,'featurizer_est') or not hasattr(self,'target_est'):
+            raise FinetuneError("You must call load_separate to initialize the model before switching out weights")
         self.need_to_refresh = True
         orig = self.saver.load(path)
         self.saver = Saver(
@@ -289,11 +292,8 @@ class BaseModel(object, metaclass=ABCMeta):
         self.input_pipeline = orig.input_pipeline
         self._load_path = path
         self.get_separate_estimators(path)
-        for hook in self.hooks:
+        for hook in self.predict_hooks:
             hook.need_to_refresh = True
-
-    def change_target_model(self,name):
-        pass
 
     def get_estimator(self, force_build_lm=False):
         conf = tf.ConfigProto(
@@ -385,14 +385,15 @@ class BaseModel(object, metaclass=ABCMeta):
             params=self.config
         )
 
-        if hasattr(self,'hooks'):
-            for hook in self.hooks:
+        if hasattr(self,'predict_hooks'):
+            for hook in self.predict_hooks:
                 hook.need_to_refresh = True
         else:
             feat_hook = InitializeHook(self.saver, model_portion='featurizer')
             target_hook = InitializeHook(self.saver, model_portion='target')
-            self.hooks = [feat_hook,target_hook]
-        return self.featurizer_est, self.target_est, self.hooks
+            predict_hook = namedtuple('InitializeHook', 'feat_hook target_hook')
+            self.predict_hooks = predict_hook(feat_hook, target_hook)
+        return self.featurizer_est, self.target_est, self.predict_hooks
 
 
     def close(self):
@@ -473,12 +474,11 @@ class BaseModel(object, metaclass=ABCMeta):
         features = None
         n = len(self._data)
         self.get_separate_estimators()
-        hooks =self.hooks
         input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
         if self._predictions is None:
             self._predictions =  self.featurizer_est.predict(
-                    input_fn=input_fn, predict_keys=None, hooks=[hooks[0]])
-            self.hooks[0].model_portion = 'featurizer'
+                    input_fn=input_fn, predict_keys=None, hooks=[self.predict_hooks.feat_hook])
+            self.predict_hooks.feat_hook.model_portion = 'featurizer'
         self._clear_prediction_queue()
         features = [None]*n
         for i in tqdm.tqdm(range(n), total=n, desc="Featurization"):
@@ -486,9 +486,9 @@ class BaseModel(object, metaclass=ABCMeta):
             features[i] = y
         preds = None
         if features is not None:
-            target_fn = self.input_pipeline.get_target_input_fn_slice(features)
+            target_fn = self.input_pipeline.get_target_input_fn(features)
             preds = self.target_est.predict(
-                    input_fn=target_fn, predict_keys=mode, hooks=[hooks[1]])
+                    input_fn=target_fn, predict_keys=mode, hooks=[self.predict_hooks.target_hook])
             preds = [pred[mode] if mode else pred for pred in preds]
         if self._predictions is not None:
             self._clear_prediction_queue()

@@ -157,12 +157,12 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
                 lr * schedules[params.lr_schedule](tf.to_float(global_step) / total_num_steps)
             )
 
-            if params.bert_adapter_size is not None:
-                    norm_variable_scopes = ['b:0', 'g:0']
-                    #trained variables include: adapter dense layers, scaling/bias factors, target model, and
-                    #the bias values in 1dconv if this layer exists (since it also has a 'b' in its name/scope).
-                    params.trained_variables = [v for v in tf.global_variables()
-                    if 'adapter' in v.name or 'target' in v.name or v.name[-3:] in norm_variable_scopes]
+            if params.adapter_size is not None:
+                norm_variable_scopes = ['b:0', 'g:0']
+                #trained variables include: adapter dense layers, scaling/bias factors, target model, and
+                #the bias values in 1dconv if this layer exists (since it also has a 'b' in its name/scope).
+                params.trained_variables = [v for v in tf.global_variables()
+                if 'adapter' in v.name or 'target' in v.name or v.name[-3:] in norm_variable_scopes]
             else:
                 params.trained_variables = [v for v in tf.global_variables()]
                 
@@ -186,7 +186,7 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
                 )
                 decay_var_list = [v for v in tf.global_variables() if len(v.get_shape()) > 1 or params.vector_l2]
 
-                if params.bert_adapter_size is not None:
+                if params.adapter_size is not None:
                     decay_var_list =  set(params.trained_variables).intersection(decay_var_list)
 
                 opt.apply_gradients = functools.partial(opt.apply_gradients, decay_var_list=decay_var_list)

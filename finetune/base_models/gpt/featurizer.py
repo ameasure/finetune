@@ -186,7 +186,7 @@ def gpt_featurizer(X, encoder, config, train=False, reuse=None):
 
         h = embed(X, embed_weights)
         for layer in range(config.n_layer):
-            if (config.n_layer - layer) == config.num_layers_trained and config.num_layers_trained != config.n_layer and config.bert_adapter_size is not None:
+            if (config.n_layer - layer) == config.num_layers_trained and config.num_layers_trained != config.n_layer and config.adapter_size is not None:
                 h = tf.stop_gradient(h)
                 train_layer = False
             else:
@@ -194,7 +194,7 @@ def gpt_featurizer(X, encoder, config, train=False, reuse=None):
 
             with tf.variable_scope('h%d_' % layer):
                 block_fn = functools.partial(block, n_head=config.n_heads, act_fn=config.act_fn,
-                                            adptr_size = config.bert_adapter_size, resid_pdrop=config.resid_p_drop,
+                                            adptr_size = config.adapter_size, resid_pdrop=config.resid_p_drop,
                                             attn_pdrop=config.attn_p_drop, scope='h%d' % layer, train=train_layer, scale=True)
                 if config.low_memory_mode and train_layer:
                     block_fn = recompute_grad(block_fn, use_entire_scope=True)
