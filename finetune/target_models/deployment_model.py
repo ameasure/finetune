@@ -55,12 +55,9 @@ class DeploymentModel(BaseModel):
         if original_model.config.adapter_size != self.config.adapter_size:
             raise FinetuneError("Model loaded from file and base_model have incompatible adapter_size in config")
         self.input_pipeline = original_model.input_pipeline
-        print(self.input_pipeline._target_encoder)
         self._target_model = original_model._target_model
         self._predict_op = original_model._predict_op
         self._predict_proba_op = original_model._predict_proba_op
-        print(self._target_model)
-        print(self.input_pipeline.target_dim)
         self.need_to_refresh = True
         self.target_est = self.get_estimator('target')
         for hook in self.predict_hooks:
@@ -138,7 +135,6 @@ class DeploymentModel(BaseModel):
         :returns: np.array of features of shape (n_examples, embedding_size).
         """
         raise NotImplementedError
-        return super().featurize(X)
 
     def predict(self, Xs, mode=PredictMode.NORMAL, exclude_target = False):
         """
@@ -153,6 +149,8 @@ class DeploymentModel(BaseModel):
         n = len(self._data)
         self.featurizer_est = self.get_estimator('featurizer')
 
+        print(Xs)
+        print(self.input_pipeline)
         input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
         if self._predictions is None:
             self._predictions =  self.featurizer_est.predict(
@@ -175,6 +173,7 @@ class DeploymentModel(BaseModel):
             preds = self.target_est.predict(
                     input_fn=target_fn, predict_keys=mode, hooks=[self.predict_hooks.target_hook])
             preds = [pred[mode] if mode else pred for pred in preds]
+
         if self._predictions is not None:
             self._clear_prediction_queue()
         print(preds)

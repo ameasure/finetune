@@ -99,6 +99,8 @@ class BasePipeline(metaclass=ABCMeta):
         return output
 
     def text_to_tokens_mask(self, X, Y=None):
+        print('self in text to tokens mask')
+        print(self)
         out_gen = self._text_to_ids(X, pad_token=self.config.pad_token)
         for out in out_gen:
             feats = {"tokens": out.token_ids, "mask": out.mask}
@@ -141,6 +143,8 @@ class BasePipeline(metaclass=ABCMeta):
         return Dataset.from_generator(lambda: self.wrap_tqdm(dataset_encoded(), train), *shape_def)
 
     def _dataset_without_targets(self, Xs, train):
+        print('self in without targets')
+        print(self)
         if not callable(Xs):
             Xs_fn = lambda: self.wrap_tqdm(Xs, train)
         else:
@@ -314,6 +318,7 @@ class BasePipeline(metaclass=ABCMeta):
         return self.pad_idx_
 
     def _format_for_encoding(self, X):
+        print("this is broken")
         """
         Most subclasses take in inputs as:
             List (batch) of list (docs)
@@ -329,6 +334,9 @@ class BasePipeline(metaclass=ABCMeta):
         return list(X)
 
     def _text_to_ids(self, Xs, Y=None, pad_token=None):
+        print(Xs)
+        print('self in text to ids')
+        print(self)
         Xs = self._format_for_encoding(Xs)
         if self.config.chunk_long_sequences and len(Xs) == 1:
             # can only chunk single sequence inputs
