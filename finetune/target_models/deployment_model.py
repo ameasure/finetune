@@ -49,7 +49,8 @@ class DeploymentModel(BaseModel):
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
         output = self.predict(['finetune'], exclude_target=True) #run arbitrary predict call to compile featurizer graph
-    
+        self._clear_prediction_queue()
+
     def load_trainables(self, path):
         original_model = self.saver.load(path)
         if original_model.config.adapter_size != self.config.adapter_size:
@@ -62,6 +63,7 @@ class DeploymentModel(BaseModel):
         self.target_est = self.get_estimator('target')
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
+        self._clear_prediction_queue()
 
     def get_estimator(self, portion):
         assert portion in ['featurizer', 'target'], "Can only split model into featurizer and target."
@@ -150,8 +152,10 @@ class DeploymentModel(BaseModel):
         self.featurizer_est = self.get_estimator('featurizer')
 
         print(Xs)
+        print(self)
         print(self.input_pipeline)
         input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
+        print(input_fn)
         if self._predictions is None:
             self._predictions =  self.featurizer_est.predict(
                     input_fn=input_fn, predict_keys=None, hooks=[self.predict_hooks.feat_hook])
