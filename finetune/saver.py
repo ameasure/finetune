@@ -164,12 +164,15 @@ class Saver:
                     to_load = [v for v in all_vars if 'target' in v.name]
                 for var in to_load:
                     name = var.name
-                    for saved_var_name, saved_var in itertools.chain(variables_sv.items(), self.fallback.items()):
-                        if saved_var_name == name:
-                            for func in self.variable_transforms:
-                                saved_var = func(name, saved_var)
-                            var.load(saved_var, session)
-                            break
+                    saved_var = None
+                    if name in variables_sv.keys():
+                        saved_var = variables_sv[name]
+                    elif name in self.fallback.keys():
+                        saved_var = self.fallback[name]
+                    if saved_var is not None:
+                        for func in self.variable_transforms:
+                            saved_var = func(name, saved_var)
+                        var.load(saved_var, session)
             else:
                 for var in all_vars:
                     name = var.name
