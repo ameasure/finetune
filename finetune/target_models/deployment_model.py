@@ -8,6 +8,7 @@ from collections import namedtuple
 from finetune.config import get_config
 from finetune.saver import Saver, InitializeHook
 from finetune.base import BaseModel
+from finetune.target_models.comparison import ComparisonPipeline
 from finetune.base_models import GPTModel, GPTModelSmall, BERTModelCased, GPT2Model
 from finetune.model import get_model_fn, get_separate_model_fns, PredictMode
 from finetune.encoding.target_encoders import OneHotLabelEncoder
@@ -22,7 +23,8 @@ class DeploymentPipeline(BasePipeline):
 
 class DeploymentModel(BaseModel):
     """ 
-    Classifies a single document into 1 of N categories.
+    Implements inference in arbitrary tasks in a cached manner by loading weights efficiently, allowing for quick interchanging of
+    weights without slow graph recompilation.
 
     :param config: A :py:class:`finetune.config.Settings` object or None (for default config).
     :param \**kwargs: key-value pairs of config items to override.
@@ -49,12 +51,13 @@ class DeploymentModel(BaseModel):
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
         output = self.predict(['finetune'], exclude_target=True) #run arbitrary predict call to compile featurizer graph
-        self._clear_prediction_queue()
 
     def load_trainables(self, path):
         original_model = self.saver.load(path)
         if original_model.config.adapter_size != self.config.adapter_size:
             raise FinetuneError("Model loaded from file and base_model have incompatible adapter_size in config")
+        #self.input_pipeline = original_model.input_pipeline.__class__(self.config)
+        self._get_input_pipeline = original_model._get_input_pipeline
         self.input_pipeline = original_model.input_pipeline
         self._target_model = original_model._target_model
         self._predict_op = original_model._predict_op
@@ -63,7 +66,12 @@ class DeploymentModel(BaseModel):
         self.target_est = self.get_estimator('target')
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
-        self._clear_prediction_queue()
+
+        if isinstance(self.input_pipeline, ComparisonPipeline): #this will cause the graph to be reloaded - quick weight changes for comparison are not supported
+            self._predictions = None
+            self._cached_predict = False
+            self._closed = False
+            self._to_pull = 0
 
     def get_estimator(self, portion):
         assert portion in ['featurizer', 'target'], "Can only split model into featurizer and target."
@@ -86,19 +94,19 @@ class DeploymentModel(BaseModel):
             train_distribute=distribute_strategy,
             keep_checkpoint_max=0
         )
-
-        if self.need_to_refresh:
-            fn = get_separate_model_fns(
-                target_model_fn=self._target_model if portion == 'target' else None, 
-                predict_op=self._predict_op,
-                predict_proba_op=self._predict_proba_op,
-                build_target_model=self.input_pipeline.target_dim is not None,
-                encoder=self.input_pipeline.text_encoder,
-                target_dim=self.input_pipeline.target_dim if portion == 'target' else None,
-                label_encoder=self.input_pipeline.label_encoder if portion == 'target' else None,
-                saver=self.saver,
-                portion=portion
-            )
+        #if self.need_to_refresh:
+        fn = get_separate_model_fns(
+            target_model_fn=self._target_model if portion == 'target' else None, 
+            predict_op=self._predict_op,
+            predict_proba_op=self._predict_proba_op,
+            build_target_model=self.input_pipeline.target_dim is not None,
+            encoder=self.input_pipeline.text_encoder,
+            target_dim=self.input_pipeline.target_dim if portion == 'target' else None,
+            label_encoder=self.input_pipeline.label_encoder if portion == 'target' else None,
+            saver=self.saver,
+            portion=portion,
+            build_attn=not isinstance(self.input_pipeline, ComparisonPipeline)
+        )
 
         if portion == 'featurizer':
             estimator = tf.estimator.Estimator(
@@ -138,9 +146,14 @@ class DeploymentModel(BaseModel):
         """
         raise NotImplementedError
 
+    def get_input_fn(self):
+        print('getting input fn')
+        return lambda : self.input_pipeline.get_predict_input_fn(self._data_generator)()
+
+
     def predict(self, Xs, mode=PredictMode.NORMAL, exclude_target = False):
         """
-        Produces a list of most likely class labels as determined by the fine-tuned model.
+        Performs inference using the weights and targets from the model in filepath used for load_trainables. 
 
         :param X: list or array of text to embed.
         :returns: list of class labels.
@@ -149,17 +162,13 @@ class DeploymentModel(BaseModel):
         self._data = Xs
         self._closed = False
         n = len(self._data)
-        self.featurizer_est = self.get_estimator('featurizer')
 
-        print(Xs)
-        print(self)
-        print(self.input_pipeline)
-        input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
-        print(input_fn)
         if self._predictions is None:
-            self._predictions =  self.featurizer_est.predict(
-                    input_fn=input_fn, predict_keys=None, hooks=[self.predict_hooks.feat_hook])
+            featurizer_est = self.get_estimator('featurizer')]
+            self._predictions =  featurizer_est.predict(
+                    input_fn=self.get_input_fn(), predict_keys=None, hooks=[self.predict_hooks.feat_hook])
             self.predict_hooks.feat_hook.model_portion = 'featurizer'
+
         self._clear_prediction_queue()
         
         features = [None]*n
@@ -200,20 +209,45 @@ class DeploymentModel(BaseModel):
         :param batch_size: integer number of examples per batch. When N_GPUS > 1, this number
                            corresponds to the number of training examples provided to each GPU.
         """
-        return super().finetune(X, Y=Y, batch_size=batch_size)
+        raise NotImplementedError
 
     @classmethod
     def get_eval_fn(cls):
-        return lambda labels, targets: np.mean(np.asarray(labels) == np.asarray(targets))
+        raise NotImplementedError
 
     
     @staticmethod
     def _target_model(config, featurizer_state, targets, n_outputs, train=False, reuse=None, **kwargs):
         raise NotImplementedError
-    
 
     def _predict_op(self, logits, **kwargs):
         raise NotImplementedError
 
     def _predict_proba_op(self, logits, **kwargs):
         raise NotImplementedError
+
+    def fit(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def attention_weights(self, Xs):
+        raise NotImplementedError
+
+    def generate_text(self, seed_text, max_length, use_extra_toks):
+        raise NotImplementedError
+    
+    def save(self, path)
+        raise NotImplementedError
+
+    def create_base_model(self, filename, exists_ok)
+        raise NotImplementedError
+    
+    def load(cls, path, **kwargs):
+        raise NotImplementedError
+
+    def finetune_grid_search(cls, Xs, Y, *, test_size, eval_fn, probs, return_all, **kwargs):
+        raise NotImplementedError
+
+    def finetune_grid_search_cv(cls, Xs, Y, *, n_splits, test_size, eval_fn, probs,
+                                return_all, **kwargs):
+        raise NotImplementedError
+

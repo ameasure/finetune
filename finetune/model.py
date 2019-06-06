@@ -234,7 +234,7 @@ def get_model_fn(target_model_fn, predict_op, predict_proba_op, build_target_mod
 
 
 def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_target_model, encoder, target_dim,
-                 label_encoder, saver, portion):
+                 label_encoder, saver, portion, build_attn):
 
     def _featurizer_model_fn(features, labels, mode, params):
         assert mode == tf.estimator.ModeKeys.PREDICT, "mode MUST be predict - model fns should not be separated on train"
@@ -255,8 +255,9 @@ def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_
         predictions = {'features':featurizer_state['features'],
                     'sequence_features':featurizer_state['sequence_features']}
         
-        if params.base_model in [GPTModel, GPTModelSmall]:
+        if params.base_model in [GPTModel, GPTModelSmall] and build_attn:
             predictions['attention_weights'] = featurizer_state['attention_weights']
+
         return tf.estimator.EstimatorSpec(
                 mode=mode,
                 predictions=predictions
@@ -319,7 +320,7 @@ def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_
         task_id=None
 
         Y = labels
-        if params.base_model in [GPTModel, GPTModelSmall]:
+        if params.base_model in [GPTModel, GPTModelSmall] and build_attn:
             predictions[PredictMode.ATTENTION] = featurizer_state['attention_weights']
 
         if build_target_model:

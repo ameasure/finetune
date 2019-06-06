@@ -247,54 +247,6 @@ class BaseModel(object, metaclass=ABCMeta):
         self.resolved_gpus = resolved_gpus
         return distribute_strategy
 
-    @classmethod
-    def load_separate(cls,path):
-        """
-        Initialize a model with target and featurizer split into two estimators. This allows
-        faster loading and changing weights within a constant architecture in deployment.
-        """
-        model = cls()
-        model._load_path = path
-        
-        orig = model.saver.load(path)
-        model.config = orig.config
-        model.saver.set_fallback(model.config.base_model_path)
-        if orig.config.adapter_size is None:
-            raise FinetuneError("The file you are trying to load from has the adapter_size set to None. Must be using adapters\
-            in order to use efficient separate estimator loading.")
-        model.config.build_separate_estimator = True
-        
-        model.need_to_refresh = True
-        model.input_pipeline = orig.input_pipeline
-        model.get_separate_estimators(path)
-        model.predict_hooks.feat_hook.model_portion = 'whole_featurizer'
-        for hook in model.predict_hooks:
-            hook.need_to_refresh = True
-        return model
-
-    def change_weights(self,path):
-        """
-        Initialize a model with target and featurizer split into two estimators. This allows
-        faster loading and changing weights within a constant neural architecture in deployment.
-        """
-
-        if not hasattr(self,'featurizer_est') or not hasattr(self,'target_est'):
-            raise FinetuneError("You must call load_separate to initialize the model before switching out weights")
-        self.need_to_refresh = True
-        orig = self.saver.load(path)
-        self.saver = Saver(
-            fallback_filename=self.config.base_model_path,
-            exclude_matches=None if self.config.save_adam_vars else "Adam",
-            variable_transforms=[embedding_preprocessor(self.input_pipeline, self.config)],
-            save_dtype=self.config.save_dtype
-        )
-
-        self.input_pipeline = orig.input_pipeline
-        self._load_path = path
-        self.get_separate_estimators(path)
-        for hook in self.predict_hooks:
-            hook.need_to_refresh = True
-
     def get_estimator(self, force_build_lm=False):
         conf = tf.ConfigProto(
             allow_soft_placement=self.config.soft_device_placement,
@@ -335,66 +287,6 @@ class BaseModel(object, metaclass=ABCMeta):
             params=self.config
         )
         return est, hooks
-    
-    def get_separate_estimators(self, force_build_lm = False, load_path=None):
-        conf = tf.ConfigProto(
-            allow_soft_placement=self.config.soft_device_placement,
-            log_device_placement=self.config.log_device_placement,
-        )
-        conf.gpu_options.per_process_gpu_memory_fraction = (
-            self.config.per_process_gpu_memory_fraction
-        )
-        distribute_strategy = self._distribute_strategy(self.config.visible_gpus)
-
-        config = tf.estimator.RunConfig(
-            tf_random_seed=self.config.seed,
-            save_summary_steps=self.config.val_interval,
-            save_checkpoints_secs=None,
-            save_checkpoints_steps=None,
-            # disable auto summaries
-            session_config=conf,
-            log_step_count_steps=100,
-            train_distribute=distribute_strategy,
-            keep_checkpoint_max=0
-        )
-
-        if self.need_to_refresh or not hasattr(self, 'fns'):
-            self.fns = get_separate_model_fns(
-                target_model_fn=self._target_model, 
-                predict_op=self._predict_op,
-                predict_proba_op=self._predict_proba_op,
-                build_target_model=self.input_pipeline.target_dim is not None,
-                build_lm=force_build_lm or self.config.lm_loss_coef > 0.0,
-                encoder=self.input_pipeline.text_encoder,
-                target_dim=self.input_pipeline.target_dim,
-                label_encoder=self.input_pipeline.label_encoder,
-                saver=self.saver
-            )
-
-        self.target_est = tf.estimator.Estimator(
-            model_dir=self.estimator_dir,
-            model_fn=self.fns['target_model_fn'],
-            config=config,
-            params=self.config
-        )
-
-        self.featurizer_est = tf.estimator.Estimator(
-            model_dir=self.estimator_dir,
-            model_fn=self.fns['featurizer_model_fn'],
-            config=config,
-            params=self.config
-        )
-
-        if hasattr(self,'predict_hooks'):
-            for hook in self.predict_hooks:
-                hook.need_to_refresh = True
-        else:
-            feat_hook = InitializeHook(self.saver, model_portion='featurizer')
-            target_hook = InitializeHook(self.saver, model_portion='target')
-            predict_hook = namedtuple('InitializeHook', 'feat_hook target_hook')
-            self.predict_hooks = predict_hook(feat_hook, target_hook)
-        return self.featurizer_est, self.target_est, self.predict_hooks
-
 
     def close(self):
         self._closed = True
