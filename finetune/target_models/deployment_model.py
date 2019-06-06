@@ -9,6 +9,9 @@ from finetune.config import get_config
 from finetune.saver import Saver, InitializeHook
 from finetune.base import BaseModel
 from finetune.target_models.comparison import ComparisonPipeline
+from finetune.target_models.sequence_labeling import SequencePipeline
+from finetune.target_models.association import AssociationPipeline
+from finetune.target_models.classifier import ClassificationPipeline
 from finetune.base_models import GPTModel, GPTModelSmall, BERTModelCased, GPT2Model
 from finetune.model import get_model_fn, get_separate_model_fns, PredictMode
 from finetune.encoding.target_encoders import OneHotLabelEncoder
@@ -19,7 +22,6 @@ from finetune.input_pipeline import BasePipeline
 class DeploymentPipeline(BasePipeline):
     def _target_encoder(self):
         raise NotImplementedError
-
 
 class DeploymentModel(BaseModel):
     """ 
@@ -44,6 +46,7 @@ class DeploymentModel(BaseModel):
         super().__init__(**kwargs)
         self.config.base_model = base_model
         self.need_to_refresh = True
+        self.task = 'Classification'
 
     def load_featurizer(self):
         self.featurizer_est = self.get_estimator('featurizer')
@@ -51,6 +54,7 @@ class DeploymentModel(BaseModel):
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
         output = self.predict(['finetune'], exclude_target=True) #run arbitrary predict call to compile featurizer graph
+        self._clear_prediction_queue()
 
     def load_trainables(self, path):
         original_model = self.saver.load(path)
@@ -66,12 +70,19 @@ class DeploymentModel(BaseModel):
         self.target_est = self.get_estimator('target')
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
-
-        if isinstance(self.input_pipeline, ComparisonPipeline): #this will cause the graph to be reloaded - quick weight changes for comparison are not supported
-            self._predictions = None
-            self._cached_predict = False
-            self._closed = False
-            self._to_pull = 0
+        self._data = None
+        self._to_pull = 0
+        self.task = None
+        if isinstance(self.input_pipeline, SequencePipeline) :
+            self.task = 'Sequence Labeling'
+        elif isinstance(self.input_pipeline, ComparisonPipeline):
+            self.task = 'Comparison'
+        elif isinstance(self.input_pipeline, BasePipeline):
+            self.task = 'Classification'
+        elif isinstance(self.input_pipeline, AssociationPipeline):
+            self.task = "Association"
+        else:
+            raise FinetuneError("Invalid pipeline in loaded file.")
 
     def get_estimator(self, portion):
         assert portion in ['featurizer', 'target'], "Can only split model into featurizer and target."
@@ -146,10 +157,22 @@ class DeploymentModel(BaseModel):
         """
         raise NotImplementedError
 
-    def get_input_fn(self):
-        print('getting input fn')
-        return lambda : self.input_pipeline.get_predict_input_fn(self._data_generator)()
+    def get_input_fn(self, gen):
+        return lambda: self.intermediate(gen)
+    
+    def intermediate(self,gen):
+        x = lambda : self.select_pipeline(gen)
+        return x()
 
+    def select_pipeline(self, gen):
+        print('in select_pipeline')
+        #task = next(self._data_generator())
+        task = self._data.pop(0)
+        print(task)
+        print(self._data)
+        pipelines = {'Classification':ClassificationPipeline, 'Comparison':ComparisonPipeline, 'Sequence Labeling':SequencePipeline, 'Association':AssociationPipeline}
+        pipe = pipelines[task](self.config)
+        return (lambda : pipe.get_predict_input_fn(gen)())()
 
     def predict(self, Xs, mode=PredictMode.NORMAL, exclude_target = False):
         """
@@ -158,15 +181,22 @@ class DeploymentModel(BaseModel):
         :param X: list or array of text to embed.
         :returns: list of class labels.
         """
+        #print("TASK")
+        #print(self.task)
+        #print(Xs)
         Xs = self.input_pipeline._format_for_inference(Xs)
+        Xs.insert(0, self.task)
         self._data = Xs
         self._closed = False
         n = len(self._data)
+        #print(self._data)
+
+
 
         if self._predictions is None:
-            featurizer_est = self.get_estimator('featurizer')]
+            featurizer_est = self.get_estimator('featurizer')
             self._predictions =  featurizer_est.predict(
-                    input_fn=self.get_input_fn(), predict_keys=None, hooks=[self.predict_hooks.feat_hook])
+                    input_fn=self.get_input_fn(self._data_generator), predict_keys=None, hooks=[self.predict_hooks.feat_hook])
             self.predict_hooks.feat_hook.model_portion = 'featurizer'
 
         self._clear_prediction_queue()
@@ -182,14 +212,14 @@ class DeploymentModel(BaseModel):
         self.target_est = self.get_estimator('target')
         preds = None
         if features is not None:
+            target_est = self.get_estimator('target')
             target_fn = self.input_pipeline.get_target_input_fn(features)
-            preds = self.target_est.predict(
+            preds = target_est.predict(
                     input_fn=target_fn, predict_keys=mode, hooks=[self.predict_hooks.target_hook])
             preds = [pred[mode] if mode else pred for pred in preds]
 
-        if self._predictions is not None:
-            self._clear_prediction_queue()
-        print(preds)
+        #if self._predictions is not None:
+        #    self._clear_prediction_queue()
         return self.input_pipeline.label_encoder.inverse_transform(np.asarray(preds))
 
 
@@ -235,10 +265,10 @@ class DeploymentModel(BaseModel):
     def generate_text(self, seed_text, max_length, use_extra_toks):
         raise NotImplementedError
     
-    def save(self, path)
+    def save(self, path):
         raise NotImplementedError
 
-    def create_base_model(self, filename, exists_ok)
+    def create_base_model(self, filename, exists_ok):
         raise NotImplementedError
     
     def load(cls, path, **kwargs):
