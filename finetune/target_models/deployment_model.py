@@ -1,7 +1,9 @@
 import tensorflow as tf
 import numpy as np
 import tqdm
+import math
 import itertools
+import pandas as pd
 from imblearn.over_sampling import RandomOverSampler
 from sklearn.utils import shuffle
 from collections import namedtuple
@@ -22,6 +24,12 @@ from finetune.input_pipeline import BasePipeline
 
 
 class DeploymentPipeline(BasePipeline):
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.pipeline_type = None
+        self.pipeline = None
+
     def _target_encoder(self):
         raise NotImplementedError
 
@@ -37,20 +45,31 @@ class DeploymentPipeline(BasePipeline):
     def pipe_gen(self):
         pipelines = {'Classification':ClassificationPipeline, 'Comparison':ComparisonPipeline, 'Sequence Labeling':SequencePipeline, 'Association':AssociationPipeline}
         while True:
-            print("current pipe gen task: "+ str(self.task))
-            yield pipelines[self.task]
+            self.pipeline_type = pipelines[self.task]#to prevent instantiating the same type of pipeline repeatedly
+            #print("current pipe gen task: "+ str(self.task))
+            yield self.pipeline_type
 
     def get_text_token_mask(self, X):
-        pipe = next(self.pipe_gen())(self.config)
-        return pipe.text_to_tokens_mask(X)
+        _ = next(self.pipe_gen())
+        if type(self.pipeline) != self.pipeline_type:
+            self.pipeline = next(self.pipe_gen())(self.config)
+        return self.pipeline.text_to_tokens_mask(X)
         #next(self.pipe_gen())(self.config).text_to_tokens_mask
 
     def get_feed_shape_type_def(self):
         while True:
-            print('in get feed shape')
+            #print('in get feed shape')
             pipe = next(self.pipe_gen())(self.config)
             types, shapes = pipe.feed_shape_type_def()
             yield types[0], shapes[0] # 0s cut out the targets
+
+    def get_target_input_fn(self, features, batch_size=None):
+        batch_size = batch_size or self.config.batch_size*4
+        features = pd.DataFrame(features).to_dict('list')
+        for key in features:
+            features[key] = np.array(features[key])
+        tf_dataset = lambda : tf.data.Dataset.from_tensor_slices(dict(features)).batch(batch_size)
+        return tf_dataset
 
 class DeploymentModel(BaseModel):
     """ 
@@ -84,7 +103,6 @@ class DeploymentModel(BaseModel):
         for hook in self.predict_hooks:
             hook.need_to_refresh = True
         output = self.predict(['finetune'], exclude_target=True) #run arbitrary predict call to compile featurizer graph
-        self._clear_prediction_queue()
 
     def load_trainables(self, path):
         original_model = self.saver.load(path)
@@ -170,10 +188,10 @@ class DeploymentModel(BaseModel):
                 params=self.config
             )
 
-        if hasattr(self,'predict_hooks'):
+        if hasattr(self,'predict_hooks') and portion == 'featurizer':
             for hook in self.predict_hooks:
                 hook.need_to_refresh = True
-        else:
+        elif not hasattr(self,'predict_hooks'):
             feat_hook = InitializeHook(self.saver, model_portion='featurizer')
             target_hook = InitializeHook(self.saver, model_portion='target')
             predict_hook = namedtuple('InitializeHook', 'feat_hook target_hook')
@@ -193,30 +211,8 @@ class DeploymentModel(BaseModel):
         raise NotImplementedError
 
     def get_input_fn(self, gen):
-        print('in get input fn')
         return self.input_pipeline.get_predict_input_fn(gen)
-    '''
-    def input_fns(self):
-        print('in input_fns')
-        while not self._closed:
-            print('yielding')
-            pipelines = {'Classification':ClassificationPipeline, 'Comparison':ComparisonPipeline, 'Sequence Labeling':SequencePipeline, 'Association':AssociationPipeline}
-            task = next(self._data_generator())
-            pipe = pipelines[self.task](self.config)
-            fn = pipe.get_predict_input_fn(self._data_generator)
-            yield fn()
-    
-    def select_pipeline(self, gen):
-        print('in select_pipeline')
-        self.task = next(self._data_generator())
-        #self.task = self._data.pop(0)
-        #task = next(gen())
-        print(self.task)
-        #print(self._data)
-        pipelines = {'Classification':ClassificationPipeline, 'Comparison':ComparisonPipeline, 'Sequence Labeling':SequencePipeline, 'Association':AssociationPipeline}
-        pipe = pipelines[self.task](self.config)
-        return lambda pipe=pipe: self.pipe_input_fn(gen, pipe)
-    '''
+
     def pipe_input_fn(self, gen, pipe):
         fn = pipe.get_predict_input_fn(gen)
         return fn()
@@ -228,7 +224,7 @@ class DeploymentModel(BaseModel):
         :param X: list or array of text to embed.
         :returns: list of class labels.
         """
-        print(Xs)
+        #print(Xs)
         Xs = self.input_pipeline._format_for_inference(Xs)
         self._data = Xs
         self._closed = False
@@ -240,14 +236,20 @@ class DeploymentModel(BaseModel):
                     input_fn=self.get_input_fn(self._data_generator), predict_keys=None, hooks=[self.predict_hooks.feat_hook], yield_single_examples=False)
             self.predict_hooks.feat_hook.model_portion = 'featurizer'
 
+        #self.predict_hooks.feat_hook.need_to_refresh = False
         self._clear_prediction_queue()
         
+        num_batches = math.ceil(n/self.config.batch_size)
         features = [None]*n
-        for i in tqdm.tqdm(range(n), total=n, desc="Featurization"):
+        for i in tqdm.tqdm(range(num_batches), total=num_batches, desc="Featurization by Batch"):
             y = next(self._predictions)
-            for key in y:
-                print(np.shape(y[key]))
-            features[i] = y
+            for j in range(self.config.batch_size): #this loop needed since yield_single_examples is False. In this case, n = # of predictions * batch_size
+                single_example = {key:value[j] for key,value in y.items()}
+                if 2*i + j > n-1:
+                    break
+                features[2*i + j] = single_example
+
+        
 
         if exclude_target: #to initialize featurizer weights
             return features
@@ -260,8 +262,6 @@ class DeploymentModel(BaseModel):
                     input_fn=target_fn, predict_keys=mode, hooks=[self.predict_hooks.target_hook])
             preds = [pred[mode] if mode else pred for pred in preds]
 
-        if self._predictions is not None:
-            self._clear_prediction_queue()
         return self.input_pipeline.label_encoder.inverse_transform(np.asarray(preds))
 
 
@@ -311,6 +311,9 @@ class DeploymentModel(BaseModel):
         raise NotImplementedError
 
     def create_base_model(self, filename, exists_ok):
+        raise NotImplementedError
+
+    def cached_predict(self):
         raise NotImplementedError
     
     def load(cls, path, **kwargs):
