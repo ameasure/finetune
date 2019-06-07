@@ -361,33 +361,6 @@ class BaseModel(object, metaclass=ABCMeta):
 
         return predictions
 
-
-    def separate_cached_inference(self,Xs,mode=None):
-        features = None
-        n = len(self._data)
-        self.get_separate_estimators()
-        input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
-        if self._predictions is None:
-            self._predictions =  self.featurizer_est.predict(
-                    input_fn=input_fn, predict_keys=None, hooks=[self.predict_hooks.feat_hook])
-            self.predict_hooks.feat_hook.model_portion = 'featurizer'
-        self._clear_prediction_queue()
-        features = [None]*n
-        for i in tqdm.tqdm(range(n), total=n, desc="Featurization"):
-            y = next(self._predictions)
-            features[i] = y
-        preds = None
-        if features is not None:
-            target_fn = self.input_pipeline.get_target_input_fn(features)
-            preds = self.target_est.predict(
-                    input_fn=target_fn, predict_keys=mode, hooks=[self.predict_hooks.target_hook])
-            preds = [pred[mode] if mode else pred for pred in preds]
-        if self._predictions is not None:
-            self._clear_prediction_queue()
-        return preds
-
-    
-
     def _inference(self, Xs, mode=None):
         Xs = self.input_pipeline._format_for_inference(Xs)
         if self._cached_predict or self.config.build_separate_estimators:
