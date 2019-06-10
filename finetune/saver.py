@@ -68,25 +68,26 @@ class InitializeHook(tf.train.SessionRunHook):
         self.saver = saver
         self.model_portion = model_portion
         self.need_to_refresh = True
+        self.init_fn = self.saver.get_scaffold_init_fn()
 
-    def after_create_session(self, session, coord):        
+    def after_create_session(self, session, coord): 
+        #self.init_fn = self.saver.get_scaffold_init_fn()
+        print("In after create session with model portion"+ str(self.model_portion))
         if self.model_portion != 'entire_model' and self.need_to_refresh:
-            init_fn = self.saver.get_scaffold_init_fn()
-            #print("Loaded " + str(self.model_portion) + " in after_create_session")
+            print("Loaded " + str(self.model_portion) + " in after_create_session")
             if self.model_portion == 'target':
-                init_fn(None, session,self.model_portion)
+                self.init_fn(None, session,self.model_portion)
             else:
-                init_fn(None, session,'whole_featurizer') #featurizer session only created upon start cached_predict, so load all weights
-            self.need_to_refresh = False
+                self.init_fn(None, session,'whole_featurizer') #featurizer session only created upon start cached_predict, so load all weights
+                self.need_to_refresh = False
         elif self.model_portion == 'entire_model':
-            init_fn = self.saver.get_scaffold_init_fn()
-            init_fn(None, session,self.model_portion)
+            self.init_fn(None, session,self.model_portion)
 
     def before_run(self, run_context):
-        if self.model_portion=='featurizer' and self.need_to_refresh:
-            #print("Loaded " + str(self.model_portion) + " in before_run")
-            init_fn = self.saver.get_scaffold_init_fn()
-            init_fn(None, run_context.session,self.model_portion)
+        if 'featurizer' in self.model_portion and self.need_to_refresh:
+            print("Loaded " + str(self.model_portion) + " in before_run")
+            #self.init_fn = self.saver.get_scaffold_init_fn()
+            self.init_fn(None, run_context.session,self.model_portion)
             self.need_to_refresh=False
 
 class Saver:
@@ -153,7 +154,6 @@ class Saver:
             else:
                 variables_sv = dict()
             all_vars = tf.global_variables()
-
             if model_portion != 'entire_model': #we must be loading in the case of two separate estimators
                 assert model_portion in ['featurizer','target','whole_featurizer'], "Must be using separate estimators if loading before graph creation"
                 base = [v for v in all_vars if 'target' not in v.name]

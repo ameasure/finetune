@@ -72,6 +72,7 @@ class TaskMode:
     COMPARISON = "Comparison"
     ASSOCIATION = "Association"
 
+
 class DeploymentModel(BaseModel):
     """ 
     Implements inference in arbitrary tasks in a cached manner by loading weights efficiently, allowing for quick interchanging of
@@ -107,8 +108,9 @@ class DeploymentModel(BaseModel):
 
     def load_trainables(self, path):
         original_model = self.saver.load(path)
-        if original_model.config.adapter_size != self.config.adapter_size:
-            raise FinetuneError("Model loaded from file and base_model have incompatible adapter_size in config")
+        if original_model.config.adapter_size is None:
+            print("WARNING: Loading without adapters will result in slow prediction.")
+            #raise FinetuneError("Model loaded from file and base_model have incompatible adapter_size in config")
         self._target_model = original_model._target_model
         self._predict_op = original_model._predict_op
         self._predict_proba_op = original_model._predict_proba_op
@@ -125,6 +127,11 @@ class DeploymentModel(BaseModel):
         self.input_pipeline._post_data_initialization = original_model.input_pipeline._post_data_initialization
         self.input_pipeline._format_for_inference = original_model.input_pipeline._format_for_inference
         self.input_pipeline._format_for_encoding = original_model.input_pipeline._format_for_encoding
+
+
+        self.adapters = original_model.config.adapter_size is not None
+        if not self.adapters:
+            self.predict_hooks.feat_hook.model_portion = 'whole_featurizer'
 
         if isinstance(original_model.input_pipeline, SequencePipeline) :
             self.task = TaskMode.SEQUENCE_LABELING
@@ -239,6 +246,7 @@ class DeploymentModel(BaseModel):
             featurizer_est = self.get_estimator('featurizer')
             self._predictions =  featurizer_est.predict(
                     input_fn=self.get_input_fn(self._data_generator), predict_keys=None, hooks=[self.predict_hooks.feat_hook], yield_single_examples=False)
+            #if self.adapters:
             self.predict_hooks.feat_hook.model_portion = 'featurizer'
 
         self._clear_prediction_queue()
@@ -258,11 +266,15 @@ class DeploymentModel(BaseModel):
 
         preds = None
         if features is not None:
+            if self.adapters:
+                self.predict_hooks.target_hook.need_to_refresh = True
             target_est = self.get_estimator('target')
             target_fn = self.input_pipeline.get_target_input_fn(features)
             preds = target_est.predict(
                     input_fn=target_fn, predict_keys=mode, hooks=[self.predict_hooks.target_hook])
             preds = [pred[mode] if mode else pred for pred in preds]
+
+        self._clear_prediction_queue()
 
         if self.task != TaskMode.SEQUENCE_LABELING:
             return self.input_pipeline.label_encoder.inverse_transform(np.asarray(preds))
