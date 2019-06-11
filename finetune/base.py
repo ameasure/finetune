@@ -247,7 +247,7 @@ class BaseModel(object, metaclass=ABCMeta):
         self.resolved_gpus = resolved_gpus
         return distribute_strategy
 
-    def get_estimator(self, force_build_lm=False):
+    def _get_estimator_config(self):
         conf = tf.ConfigProto(
             allow_soft_placement=self.config.soft_device_placement,
             log_device_placement=self.config.log_device_placement,
@@ -267,6 +267,11 @@ class BaseModel(object, metaclass=ABCMeta):
             train_distribute=distribute_strategy,
             keep_checkpoint_max=1
         )
+        return conf, distribute_strategy, config
+
+
+    def get_estimator(self, force_build_lm=False):
+        conf, distribute_strategy, config = self._get_estimator_config()
 
         model_fn = get_model_fn(
             target_model_fn=self._target_model,
@@ -343,9 +348,6 @@ class BaseModel(object, metaclass=ABCMeta):
         self._data = Xs
         self._closed = False
         n = len(self._data)
-        if self.config.build_separate_estimators:
-                predictions = self.separate_cached_inference(Xs,mode)
-                return predictions
         if self._predictions is None:
             input_fn = self.input_pipeline.get_predict_input_fn(self._data_generator)
             _estimator, hooks = self.get_estimator()
@@ -363,21 +365,18 @@ class BaseModel(object, metaclass=ABCMeta):
 
     def _inference(self, Xs, mode=None):
         Xs = self.input_pipeline._format_for_inference(Xs)
-        if self._cached_predict or self.config.build_separate_estimators:
-            return self._cached_inference(Xs=Xs, mode=mode)
-        else:
-            length = len(Xs) if not callable(Xs) else None
-            input_fn = self.input_pipeline.get_predict_input_fn(Xs)
-            estimator, hooks = self.get_estimator()
+        length = len(Xs) if not callable(Xs) else None
+        input_fn = self.input_pipeline.get_predict_input_fn(Xs)
+        estimator, hooks = self.get_estimator()
 
-            predictions = tqdm.tqdm(
-                estimator.predict(
-                    input_fn=input_fn, predict_keys=mode, hooks=hooks
-                ),
-                total=length,
-                desc="Inference"
-            )
-            return [pred[mode] if mode else pred for pred in predictions]
+        predictions = tqdm.tqdm(
+            estimator.predict(
+                input_fn=input_fn, predict_keys=mode, hooks=hooks
+            ),
+            total=length,
+            desc="Inference"
+        )
+        return [pred[mode] if mode else pred for pred in predictions]
 
     def fit(self, *args, **kwargs):
         """ An alias for finetune. """
