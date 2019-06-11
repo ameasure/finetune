@@ -223,11 +223,10 @@ def get_default_config():
         n_epochs=GridSearchable(3, [1, 2, 3, 4]),
         seed=42,
         max_length=512,
-        weight_stddev=0,
+        weight_stddev=0.02,
         save_dtype=None,
         val_set=None,
         per_process_gpu_memory_fraction=0.95,
-        bert_adapter_size = 64,
         adapter_size = 64, #from Parameter Efficient Transfer Learning paper
 
         # Regularization
@@ -316,9 +315,7 @@ def get_default_config():
         n_embed_featurizer=None, # needed because the dimensions CNN output are different from the embedding dimensions
 
         # BERT only
-        bert_intermediate_size=None,
-
-        build_separate_estimators = False
+        bert_intermediate_size=None
     )
     return settings
 
