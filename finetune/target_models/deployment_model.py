@@ -1,12 +1,10 @@
-import tensorflow as tf
 import numpy as np
 import tqdm
 import math
 import itertools
 import logging
 import pandas as pd
-from imblearn.over_sampling import RandomOverSampler
-from sklearn.utils import shuffle
+import tensorflow as tf
 from collections import namedtuple
 from tensorflow.python.data import Dataset
 
@@ -18,8 +16,7 @@ from finetune.target_models.sequence_labeling import SequencePipeline, SequenceL
 from finetune.target_models.association import AssociationPipeline
 from finetune.target_models.classifier import ClassificationPipeline
 from finetune.base_models import GPTModel, GPTModelSmall, BERTModelCased, GPT2Model
-from finetune.model import get_model_fn, get_separate_model_fns, PredictMode
-from finetune.encoding.target_encoders import OneHotLabelEncoder
+from finetune.model import get_separate_model_fns, PredictMode
 from finetune.errors import FinetuneError
 from finetune.input_pipeline import BasePipeline
 
@@ -54,17 +51,16 @@ class DeploymentPipeline(BasePipeline):
         
     def pipe_gen(self):
         pipelines = {'Classification':ClassificationPipeline, 'Comparison':ComparisonPipeline, 'Sequence_Labeling':SequencePipeline, 'Association':AssociationPipeline}
-        while True:
-            self.pipeline_type = pipelines[self.task]
-            yield self.pipeline_type
+        self.pipeline_type = pipelines[self.task]
+        return self.pipeline_type
 
     def get_text_token_mask(self, X):
-        _ = next(self.pipe_gen())
+        _ = self.pipe_gen()
         if type(self.pipeline) != self.pipeline_type:  #to prevent instantiating the same type of pipeline repeatedly
             if self.pipeline_type == SequencePipeline:
-                self.pipeline = next(self.pipe_gen())(self.config, multi_label=self.multi_label)
+                self.pipeline = self.pipe_gen()(self.config, multi_label=self.multi_label)
             else:
-                self.pipeline = next(self.pipe_gen())(self.config)
+                self.pipeline = self.pipe_gen()(self.config)
         return self.pipeline.text_to_tokens_mask(X)
 
     def get_target_input_fn(self, features, batch_size=None):
@@ -123,7 +119,7 @@ class DeploymentModel(BaseModel):
             raise FinetuneError('Need to call load_featurizer before loading weights from file.')
         original_model = self.saver.load(path)
         if original_model.config.adapter_size is None:
-            LOGGER.warning("Loading without adapters will result in slightly slower prediction.")
+            LOGGER.warning("Loading without adapters will result in slightly slower prediction than models that use adapters.")
             self.predict_hooks.feat_hook.model_portion = 'whole_featurizer' #need to load everything from save file, rather than standard base model file
         self._target_model = original_model._target_model
         self._predict_op = original_model._predict_op
@@ -246,7 +242,7 @@ class DeploymentModel(BaseModel):
             y = next(self._predictions)
             for j in range(self.config.batch_size): #this loop needed since yield_single_examples is False. In this case, n = # of predictions * batch_size
                 single_example = {key:value[j] for key,value in y.items()}
-                if self.config.batch_size*i + j > n-1:
+                if self.config.batch_size*i + j > n-1: #this is a result of the generator using cached_example and to_pull. If this is the last batch, we need to check that all examples come from self._data and are not cached examples
                     break
                 features[self.config.batch_size*i + j] = single_example
 

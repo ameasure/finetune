@@ -259,7 +259,7 @@ def get_separate_model_fns(target_model_fn, predict_op, predict_proba_op, build_
     if portion == 'featurizer':
         return _featurizer_model_fn
 
-    def _target_model_fn(features,labels,mode,params):
+    def _target_model_fn(features, labels, mode, params):
         assert mode == tf.estimator.ModeKeys.PREDICT, "Separated estimators are only supported for inference."
         estimator_mode = mode
         pred_op = None
