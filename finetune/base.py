@@ -15,11 +15,9 @@ import glob
 from contextlib import contextmanager
 import pathlib
 import logging
-from collections import namedtuple
 
 import tqdm
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 from tensorflow.data import Dataset
 from tensorflow.contrib.distribute import OneDeviceStrategy
@@ -32,7 +30,7 @@ from finetune.encoding.input_encoder import EncodedOutput
 from finetune.config import get_config, all_gpus, assert_valid_config
 from finetune.saver import Saver, InitializeHook
 from finetune.errors import FinetuneError
-from finetune.model import get_model_fn, get_separate_model_fns, PredictMode
+from finetune.model import get_model_fn, PredictMode
 from finetune.util.download import download_data_if_required
 from finetune.util.estimator import PatchedParameterServerStrategy
 from finetune.util.positional_embeddings import embedding_preprocessor
