@@ -22,7 +22,7 @@ import numpy as np
 from sklearn.metrics import accuracy_score, recall_score
 
 from finetune import Classifier, Regressor, DeploymentModel, SequenceLabeler
-from finetune.base_models import GPTModel, 
+from finetune.base_models import GPTModel
 from finetune.datasets import generic_download
 from finetune.config import get_config
 from finetune.errors import FinetuneError
@@ -43,7 +43,7 @@ class TestDeploymentModel(unittest.TestCase):
         'Data', 'Sequence', 'reuters.xml'
     )
     processed_path = os.path.join('Data', 'Sequence', 'reuters.json')
-
+    basemodel = GPTModel
 
     @classmethod
     def _download_data(cls):
@@ -169,7 +169,7 @@ class TestDeploymentModel(unittest.TestCase):
         """
         Ensure second call to predict is faster than first
         """
-        model = DeploymentModel(base_model=GPTModel, **self.default_config())
+        model = DeploymentModel(base_model=self.base_model, **self.default_config())
         model.load_featurizer()
         model.load_trainables(self.classifier_path)
 
@@ -188,7 +188,7 @@ class TestDeploymentModel(unittest.TestCase):
         """
         Ensure model can switch out weights without erroring out
         """
-        model = DeploymentModel(base_model=GPTModel, **self.default_config())
+        model = DeploymentModel(base_model=self.base_model, **self.default_config())
         model.load_featurizer()
         #test transitioning from any of [sequence labeling, comparison, default] to any other
         model.load_trainables(self.classifier_path)
@@ -203,7 +203,7 @@ class TestDeploymentModel(unittest.TestCase):
         """
         Ensure model produces reasonable predictions after loading weights
         """
-        model = DeploymentModel(base_model=GPTModel, **self.default_config())
+        model = DeploymentModel(base_model=self.base_model, **self.default_config())
         model.load_featurizer()
         model.load_trainables(self.classifier_path)
 
@@ -232,7 +232,7 @@ class TestDeploymentModel(unittest.TestCase):
         self.assertTrue(any(pred["text"].strip() == "dog" for pred in predictions[0]))
 
     def test_fast_switch(self):
-        model = DeploymentModel(base_model=GPTModel, **self.default_config())
+        model = DeploymentModel(base_model=self.base_model, **self.default_config())
         model.load_featurizer()
         model.load_trainables(self.classifier_path)
         model.predict('finetune')
