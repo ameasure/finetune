@@ -125,10 +125,10 @@ def create_initializer(initializer_range=0.001):
 
 def adapter(X, adapter_size, train, nx, hidden_dropout_prob=0.1):
     down_projection = tf.layers.dense(X, adapter_size, activation='sigmoid',
-        kernel_initializer=create_initializer(0.001)
+        kernel_initializer=create_initializer(0.001))
     down_projection = dropout(down_projection, hidden_dropout_prob, train)
     up_projection = tf.layers.dense(down_projection, nx,
-        kernel_initializer=create_initializer(0.001)
+        kernel_initializer=create_initializer(0.001))
     return up_projection + X
 
 
