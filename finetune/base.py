@@ -265,11 +265,11 @@ class BaseModel(object, metaclass=ABCMeta):
             train_distribute=distribute_strategy,
             keep_checkpoint_max=1
         )
-        return conf, distribute_strategy, config
+        return config
 
 
     def get_estimator(self, force_build_lm=False):
-        conf, distribute_strategy, config = self._get_estimator_config()
+        config = self._get_estimator_config()
 
         model_fn = get_model_fn(
             target_model_fn=self._target_model,
